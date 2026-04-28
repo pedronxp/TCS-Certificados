@@ -40,6 +40,7 @@ export default async function CertificateHistoryPage({
       status: true,
       issuedAt: true,
       revokedAt: true,
+      values: true,
       recipient: {
         select: {
           name: true,
@@ -130,10 +131,11 @@ export default async function CertificateHistoryPage({
 
       <section className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1080px] text-left text-sm">
+          <table className="w-full min-w-[1180px] text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500">
               <tr>
                 <th className="px-4 py-3">Titular</th>
+                <th className="px-4 py-3">Empresa</th>
                 <th className="px-4 py-3">Modelo</th>
                 <th className="px-4 py-3">Código</th>
                 <th className="px-4 py-3">Emissão</th>
@@ -152,6 +154,7 @@ export default async function CertificateHistoryPage({
                         "Sem contato/documento"}
                     </p>
                   </td>
+                  <td className="px-4 py-3">{getCompanyName(issue.values)}</td>
                   <td className="px-4 py-3">{issue.template.name}</td>
                   <td className="px-4 py-3">
                     <Link className="font-mono text-teal-700 hover:underline" href={`/validar/${issue.verificationCode}`}>
@@ -177,7 +180,7 @@ export default async function CertificateHistoryPage({
               ))}
               {!issues.length ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-10 text-center text-sm text-slate-500">
+                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
                     Nenhum certificado encontrado com os filtros atuais.
                   </td>
                 </tr>
@@ -273,6 +276,16 @@ function buildWhere(filters: ReturnType<typeof parseFilters>): Prisma.Certificat
   }
 
   return and.length ? { AND: and } : {};
+}
+
+function getCompanyName(values: unknown) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return "Sem empresa";
+
+  const issueValues = values as Record<string, unknown>;
+  const company = issueValues.empresa ?? issueValues.company;
+  const companyName = String(company ?? "").trim();
+
+  return companyName || "Sem empresa";
 }
 
 function firstParam(value: string | string[] | undefined) {
