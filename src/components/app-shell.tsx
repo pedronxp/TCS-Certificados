@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LogOut, BadgeCheck, FileText, LayoutDashboard, Users, Upload } from "lucide-react";
 import { Role } from "@prisma/client";
+import { BatchProgressToast } from "@/components/certificates/batch-progress-toast";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: [Role.ADMIN, Role.OPERADOR] },
@@ -70,6 +71,7 @@ export function AppShell({
       <main className="lg:pl-72">
         <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">{children}</div>
       </main>
+      <BatchProgressToast />
     </div>
   );
 }

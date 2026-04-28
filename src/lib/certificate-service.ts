@@ -7,10 +7,12 @@ export async function issueCertificate({
   templateId,
   values,
   issuedById,
+  batchId,
 }: {
   templateId: string;
   values: Record<string, string>;
   issuedById: string;
+  batchId?: string;
 }) {
   const template = await prisma.certificateTemplate.findUnique({
     where: { id: templateId },
@@ -57,6 +59,7 @@ export async function issueCertificate({
       values,
       template: { connect: { id: templateId } },
       issuedBy: { connect: { id: issuedById } },
+      ...(batchId ? { batch: { connect: { id: batchId } } } : {}),
       recipient: {
         create: {
           name: recipientName,

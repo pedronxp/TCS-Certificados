@@ -22,6 +22,12 @@ enum GeneratedFileType {
   DOCX
 }
 
+enum CertificateBatchStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String
@@ -33,6 +39,7 @@ model User {
 
   templates CertificateTemplate[]
   issues    CertificateIssue[]
+  batches   CertificateBatch[]
 }
 
 model CertificateTemplate {
@@ -52,6 +59,9 @@ model CertificateTemplate {
 
   variables TemplateVariable[]
   issues    CertificateIssue[]
+  batches   CertificateBatch[]
+
+  @@index([name])
 }
 
 model TemplateVariable {
@@ -75,6 +85,10 @@ model CertificateRecipient {
   createdAt DateTime @default(now())
 
   issues CertificateIssue[]
+
+  @@index([name])
+  @@index([email])
+  @@index([document])
 }
 
 model CertificateIssue {
@@ -95,7 +109,41 @@ model CertificateIssue {
   issuedById String
   issuedBy   User @relation(fields: [issuedById], references: [id])
 
+  batchId String?
+  batch   CertificateBatch? @relation(fields: [batchId], references: [id])
+
   files GeneratedFile[]
+
+  @@index([issuedAt])
+  @@index([status, issuedAt])
+  @@index([templateId, issuedAt])
+  @@index([recipientId, issuedAt])
+  @@index([issuedById, issuedAt])
+  @@index([batchId, issuedAt])
+}
+
+model CertificateBatch {
+  id          String                 @id @default(cuid())
+  status      CertificateBatchStatus @default(RUNNING)
+  total       Int
+  processed   Int                    @default(0)
+  created     Int                    @default(0)
+  errors      Json                   @default("[]")
+  values      Json
+  company     String
+  issuedDate  String
+  startedAt   DateTime               @default(now())
+  finishedAt  DateTime?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  templateId String
+  template   CertificateTemplate @relation(fields: [templateId], references: [id])
+
+  createdById String
+  createdBy   User @relation(fields: [createdById], references: [id])
+
+  issues CertificateIssue[]
 }
 
 model GeneratedFile {
