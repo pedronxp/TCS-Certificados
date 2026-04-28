@@ -1,198 +1,532 @@
 # README Técnico - TCS Certificados
 
-## Visão Geral
+Este documento descreve a arquitetura, os módulos, o modelo de dados, os fluxos internos e os cuidados operacionais do TCS Certificados.
 
-O TCS Certificados é um painel web para criar modelos de certificados, marcar variáveis em cima de um arquivo base e emitir certificados em PDF/DOCX com validação pública por QR Code.
+O objetivo é permitir que outro desenvolvedor consiga entender a aplicação, rodar o projeto, investigar problemas e evoluir o sistema com segurança.
 
-O sistema foi pensado para preservar o design original do certificado. Em vez de tentar reconstruir margem, fonte e layout de um documento enviado, ele mantém o arquivo como base e aplica os campos variáveis por cima. Para DOCX, também há suporte a placeholders editáveis no formato `{{nome}}`.
+## Índice
 
-## Stack
+- [Arquitetura Geral](#arquitetura-geral)
+- [Tecnologias](#tecnologias)
+- [Estrutura de Pastas](#estrutura-de-pastas)
+- [Modelo de Dados](#modelo-de-dados)
+- [Autenticação e Autorização](#autenticação-e-autorização)
+- [Modelos de Certificado](#modelos-de-certificado)
+- [Emissão Individual](#emissão-individual)
+- [Emissão em Lote](#emissão-em-lote)
+- [Histórico e Revogação](#histórico-e-revogação)
+- [Geração de Arquivos](#geração-de-arquivos)
+- [Storage](#storage)
+- [Rotas](#rotas)
+- [Banco e Migrations](#banco-e-migrations)
+- [Comandos de Desenvolvimento](#comandos-de-desenvolvimento)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap Técnico](#roadmap-técnico)
 
-- Next.js 16 com App Router e TypeScript
-- Tailwind CSS
-- Prisma ORM
-- PostgreSQL no Supabase
-- Supabase Storage para arquivos gerados quando configurado
-- Sessão JWT em cookie HTTP-only com `jose`
-- `bcryptjs` para senha
-- `pdf-lib` para sobrepor variáveis em PDFs e fallback de geração PDF
-- `docxtemplater` + `pizzip` para preencher DOCX
-- `mammoth` para extrair preview HTML de DOCX
-- `csv-parse` e `xlsx` para emissão em lote
+## Arquitetura Geral
 
-## Arquitetura
+A aplicação usa Next.js App Router com separação simples entre:
 
-### Camadas
+- páginas server-side para buscar dados e renderizar telas privadas;
+- componentes client-side para interações ricas;
+- rotas API para ações de autenticação, templates, usuários e certificados;
+- camada `src/lib` para regras de negócio e integrações.
 
-- `src/app`: rotas, páginas e APIs do Next.js.
-- `src/components`: componentes de painel, editor, formulários e ações.
-- `src/lib`: regras de negócio, autenticação, Prisma, Supabase e renderização.
-- `prisma`: schema, migrations e seed.
-- `docs`: documentação técnica e apresentação.
+Fluxo resumido:
 
-### Fluxo Principal
+```text
+Usuário autenticado
+  -> AppShell privado
+  -> Páginas em src/app/(private)
+  -> Rotas API em src/app/api
+  -> Serviços em src/lib
+  -> Prisma
+  -> PostgreSQL
+  -> Supabase Storage, quando configurado
+```
 
-1. Admin faz login.
-2. Admin sobe um modelo em PDF, DOCX ou imagem.
-3. O sistema cria um `CertificateTemplate`.
-4. O usuário posiciona campos variáveis no editor.
-5. Ao salvar, as variáveis são sincronizadas em `TemplateVariable`.
-6. Na emissão, o operador preenche os labels gerados.
-7. O sistema gera PDF, DOCX, código de validação e QR Code.
-8. O certificado fica disponível no histórico e na rota pública `/validar/[codigo]`.
+## Tecnologias
+
+| Tecnologia | Uso |
+| --- | --- |
+| Next.js 16 | Framework web, App Router, server components e API routes. |
+| React 19 | Componentes de interface. |
+| TypeScript | Tipagem da aplicação. |
+| Tailwind CSS | Estilização. |
+| Prisma | ORM, migrations e client tipado. |
+| PostgreSQL | Banco relacional principal. |
+| Supabase | Storage opcional para arquivos gerados. |
+| `jose` | Assinatura e validação de JWT. |
+| `bcryptjs` | Hash de senhas. |
+| `pdf-lib` | Manipulação e geração de PDF. |
+| `docx` | Criação de DOCX. |
+| `docxtemplater` + `pizzip` | Substituição de placeholders em DOCX base. |
+| `mammoth` | Extração de conteúdo de DOCX para preview. |
+| `csv-parse` + `xlsx` | Leitura de CSV/XLSX em lote. |
+| Playwright | Suporte para renderização quando o Chromium está instalado. |
+
+## Estrutura de Pastas
+
+```text
+src/app
+  layout.tsx
+  page.tsx
+  login/
+  validar/[codigo]/
+  (private)/
+    dashboard/
+    usuarios/
+    modelos/
+    certificados/
+  api/
+    auth/
+    users/
+    templates/
+    certificates/
+
+src/components
+  app-shell.tsx
+  login-form.tsx
+  certificates/
+  templates/
+
+src/lib
+  auth.ts
+  prisma.ts
+  supabase.ts
+  certificate-service.ts
+  render-certificate.ts
+  certificate-layout.ts
+  batch-jobs.ts
+  document-extract.client.ts
+
+prisma
+  schema.prisma
+  seed.ts
+  migrations/
+```
 
 ## Modelo de Dados
 
-Entidades principais:
+### Entidades principais
 
-- `User`: usuários do painel.
-- `CertificateTemplate`: modelo base do certificado.
-- `TemplateVariable`: campos usados no formulário de emissão.
-- `CertificateRecipient`: titular do certificado.
-- `CertificateIssue`: emissão com código único e status.
-- `GeneratedFile`: arquivos PDF/DOCX gerados.
+| Entidade | Responsabilidade |
+| --- | --- |
+| `User` | Usuários do painel, senha e perfil. |
+| `CertificateTemplate` | Modelo visual do certificado e arquivo base. |
+| `TemplateVariable` | Campos configuráveis do modelo. |
+| `CertificateRecipient` | Titular do certificado emitido. |
+| `CertificateIssue` | Registro de emissão, status e código de validação. |
+| `CertificateBatch` | Controle de lotes processados de forma assíncrona. |
+| `GeneratedFile` | Arquivos PDF/DOCX gerados para uma emissão. |
 
-Perfis:
+### Perfis
 
-- `ADMIN`: gerencia usuários e modelos, emite e revoga certificados.
-- `OPERADOR`: emite certificados e consulta histórico.
+| Perfil | Permissões principais |
+| --- | --- |
+| `ADMIN` | Gerenciar usuários, modelos, emissões, histórico e revogações. |
+| `OPERADOR` | Emitir certificados e consultar histórico. |
 
-## Templates e Placeholders
+### Status relevantes
+
+```text
+CertificateStatus
+  ISSUED
+  REVOKED
+
+CertificateBatchStatus
+  RUNNING
+  COMPLETED
+  FAILED
+
+GeneratedFileType
+  PDF
+  DOCX
+```
+
+### Índices
+
+O schema inclui índices para melhorar consultas de histórico:
+
+- template por nome;
+- titular por nome, e-mail e documento;
+- emissão por data;
+- status + data;
+- template + data;
+- titular + data;
+- emissor + data;
+- lote + data.
+
+## Autenticação e Autorização
+
+Arquivo principal:
+
+```text
+src/lib/auth.ts
+```
+
+Responsabilidades:
+
+- validar credenciais;
+- criar sessão JWT;
+- gravar cookie HTTP-only;
+- recuperar usuário autenticado;
+- proteger páginas e APIs privadas;
+- redirecionar usuários não autenticados.
+
+O cookie HTTP-only reduz exposição do token ao JavaScript do navegador. A variável `SESSION_SECRET` deve ser forte e exclusiva por ambiente.
+
+## Modelos de Certificado
+
+Arquivos principais:
+
+```text
+src/components/templates/template-editor.tsx
+src/components/templates/upload-template-button.tsx
+src/app/api/templates/route.ts
+src/app/api/templates/[id]/route.ts
+src/lib/certificate-layout.ts
+src/lib/document-extract.client.ts
+```
+
+O sistema suporta modelos base em PDF, DOCX ou imagem.
 
 ### PDF
 
-O PDF enviado é mantido como base. Na geração, o sistema usa `pdf-lib` para desenhar texto, QR Code e variáveis sobre a primeira página.
+O PDF é usado como base visual. Durante a emissão, o sistema desenha textos, variáveis e QR Code sobre o documento.
 
 ### DOCX
 
-O DOCX enviado é extraído com `mammoth` para gerar preview no editor. Se houver placeholders como `{{nome}}`, eles são detectados e viram campos automaticamente.
+O DOCX pode conter placeholders como:
 
-Na geração DOCX, o `docxtemplater` substitui placeholders usando os valores preenchidos.
+```text
+{{nome}}
+{{empresa}}
+{{data}}
+{{curso}}
+```
+
+Quando esses placeholders existem, o sistema consegue detectá-los e usá-los como variáveis do formulário.
 
 ### Imagem
 
-Imagem enviada vira fundo visual do canvas. Os campos são posicionados manualmente e renderizados sobre ela.
+Imagens funcionam como fundo visual do certificado. Os elementos são posicionados manualmente no editor.
 
-## Configuração
+## Emissão Individual
 
-Crie `.env` e `.env.local` a partir de `.env.example`.
+Arquivos principais:
 
-Variáveis essenciais:
-
-```env
-DATABASE_URL="postgresql://..."
-SESSION_SECRET="troque-em-producao"
-NEXT_PUBLIC_APP_URL="http://localhost:3000"
-ADMIN_NAME="Administrador"
-ADMIN_EMAIL="admin@tcs.local"
-ADMIN_PASSWORD="admin123456"
-NEXT_PUBLIC_SUPABASE_URL="https://...supabase.co"
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY="..."
-SUPABASE_SERVICE_ROLE_KEY="..."
-SUPABASE_CERTIFICATE_BUCKET="certificados"
+```text
+src/app/(private)/certificados/emitir/page.tsx
+src/components/certificates/issue-form.tsx
+src/app/api/certificates/issue/route.ts
+src/lib/certificate-service.ts
 ```
 
-Para Supabase, a URL atual usa pooler na porta `6543` com `pgbouncer=true`, `connection_limit=5` e `pool_timeout=20`, evitando falhas intermitentes da conexão direta IPv6.
+Fluxo:
 
-## Comandos
+1. Operador seleciona um modelo.
+2. A tela monta o formulário com base nas variáveis do modelo.
+3. Operador preenche os dados do titular.
+4. API chama `issueCertificate`.
+5. O serviço cria ou reutiliza `CertificateRecipient`.
+6. O serviço cria `CertificateIssue` com código único.
+7. O sistema gera PDF/DOCX.
+8. Os arquivos ficam vinculados em `GeneratedFile`.
 
-Instalar dependências:
+## Emissão em Lote
 
-```bash
-npm install
+Arquivos principais:
+
+```text
+src/app/(private)/certificados/lote/page.tsx
+src/components/certificates/batch-form.tsx
+src/components/certificates/batch-progress-toast.tsx
+src/app/api/certificates/batch/route.ts
+src/lib/batch-jobs.ts
 ```
 
-Gerar Prisma Client:
+### Fluxo da interface
 
-```bash
-npx prisma generate
+1. O operador escolhe o modelo.
+2. Informa empresa, data e variáveis compartilhadas.
+3. Cola a lista de nomes.
+4. Revisa o lote.
+5. Inicia a geração.
+6. O toast acompanha o processamento.
+7. A página lista os lotes mais recentes.
+
+### Fluxo da API
+
+1. `POST /api/certificates/batch` recebe formulário manual ou arquivo.
+2. A rota normaliza os dados.
+3. A rota valida empresa e data.
+4. `startBatchJob` cria um `CertificateBatch`.
+5. O processamento roda de forma assíncrona.
+6. Cada linha chama `issueCertificate`.
+7. Progresso, criados e erros são persistidos.
+8. O lote termina como `COMPLETED` ou `FAILED`.
+
+### Consulta de progresso
+
+```text
+GET /api/certificates/batch?jobId=<id>
 ```
 
-Aplicar migrations:
+Retorna:
 
-```bash
-npm run prisma:migrate -- --name init
+- status;
+- total;
+- processados;
+- criados;
+- erros;
+- percentual de progresso;
+- nome do template.
+
+### Regras atuais
+
+- O lote precisa ter pelo menos um nome ou uma planilha válida.
+- Empresa é obrigatória.
+- Data é obrigatória.
+- Empresa e data devem ser iguais em todo o lote.
+- Erros por linha não impedem o restante do lote de continuar.
+- O certificado gerado recebe `batchId`.
+
+## Histórico e Revogação
+
+Arquivos principais:
+
+```text
+src/app/(private)/certificados/historico/page.tsx
+src/components/certificates/revoke-button.tsx
+src/app/api/certificates/[id]/revoke/route.ts
 ```
 
-Criar admin padrão:
+O histórico permite:
 
-```bash
-npm run prisma:seed
-```
+- buscar por titular, código, modelo, e-mail, documento e emissor;
+- filtrar por status;
+- filtrar por intervalo de datas;
+- navegar por páginas;
+- baixar PDF e DOCX;
+- revogar certificados.
 
-Rodar local:
-
-```bash
-npm run dev -- -p 3000
-```
-
-Validar:
-
-```bash
-npm run lint
-npm run build
-npx prisma validate
-```
+Revogações preservam o registro original. O certificado passa para status `REVOKED`, mantendo rastreabilidade na validação pública.
 
 ## Geração de Arquivos
 
-PDF:
+Arquivos principais:
 
-- usa o PDF base quando o modelo foi criado a partir de PDF;
-- usa fallback `pdf-lib` quando não há browser Playwright instalado;
-- pode usar Playwright no futuro para fidelidade HTML/CSS quando o Chromium estiver disponível.
+```text
+src/lib/certificate-service.ts
+src/lib/render-certificate.ts
+src/lib/certificate-layout.ts
+```
 
-DOCX:
+### PDF
 
-- se houver arquivo base DOCX, substitui placeholders com `docxtemplater`;
-- se não houver, gera um DOCX simples com os dados principais.
+O PDF é a saída principal, adequada para preservação visual.
 
-Storage:
+Quando há base PDF, o sistema usa o documento original como fundo. Textos variáveis e QR Code são sobrepostos com base nas posições configuradas no editor.
 
-- quando `SUPABASE_SERVICE_ROLE_KEY` está configurada, PDF/DOCX são enviados para Supabase Storage;
-- sem essa chave, os arquivos ficam no banco como `Bytes`.
+### DOCX
+
+O DOCX é a saída editável.
+
+Quando o modelo original é DOCX com placeholders, o `docxtemplater` substitui os campos. Quando não há base adequada, o sistema gera um DOCX simplificado com os dados principais.
+
+## Storage
+
+Arquivo principal:
+
+```text
+src/lib/supabase.ts
+```
+
+Quando `SUPABASE_SERVICE_ROLE_KEY` está configurada:
+
+- PDFs e DOCXs são enviados para Supabase Storage;
+- o bucket usado vem de `SUPABASE_CERTIFICATE_BUCKET`;
+- os registros em `GeneratedFile` apontam para o caminho armazenado.
+
+Quando Supabase não está configurado:
+
+- os arquivos podem ser mantidos como bytes no banco, conforme a lógica de fallback.
+
+## Rotas
+
+### Páginas públicas
+
+| Rota | Descrição |
+| --- | --- |
+| `/` | Entrada da aplicação. |
+| `/login` | Login. |
+| `/validar/[codigo]` | Validação pública de certificado. |
+
+### Páginas privadas
+
+| Rota | Descrição |
+| --- | --- |
+| `/dashboard` | Indicadores gerais. |
+| `/usuarios` | Gestão de usuários. |
+| `/modelos` | Listagem de modelos. |
+| `/modelos/novo` | Criação de modelo. |
+| `/modelos/[id]/editar` | Editor de modelo. |
+| `/certificados/emitir` | Emissão individual. |
+| `/certificados/lote` | Emissão em lote. |
+| `/certificados/historico` | Histórico de certificados. |
+
+### APIs
+
+| Método e rota | Descrição |
+| --- | --- |
+| `POST /api/auth/login` | Autentica usuário. |
+| `POST /api/auth/logout` | Encerra sessão. |
+| `GET /api/users` | Lista usuários. |
+| `POST /api/users` | Cria usuário. |
+| `GET /api/templates` | Lista modelos. |
+| `POST /api/templates` | Cria modelo. |
+| `GET /api/templates/[id]` | Busca modelo. |
+| `PUT /api/templates/[id]` | Atualiza modelo. |
+| `DELETE /api/templates/[id]` | Remove modelo. |
+| `POST /api/certificates/issue` | Emite certificado individual. |
+| `POST /api/certificates/batch` | Inicia lote. |
+| `GET /api/certificates/batch` | Consulta progresso do lote. |
+| `GET /api/certificates/[id]/download/[type]` | Baixa arquivo gerado. |
+| `POST /api/certificates/[id]/revoke` | Revoga certificado. |
+
+## Banco e Migrations
+
+Migrations atuais:
+
+| Migration | Objetivo |
+| --- | --- |
+| `20260428152808_init` | Estrutura inicial do sistema. |
+| `20260428180000_add_certificate_batches` | Adiciona lotes de certificados. |
+| `20260428183000_add_history_indexes` | Adiciona índices para histórico e filtros. |
+
+Comandos úteis:
+
+```bash
+npm run prisma:generate
+npm run prisma:migrate
+npx prisma validate
+```
+
+Em produção, aplique migrations com o fluxo apropriado do ambiente, normalmente com `prisma migrate deploy`.
+
+## Comandos de Desenvolvimento
+
+```bash
+npm install
+npm run dev
+npm run lint
+npm run build
+npm run prisma:generate
+npm run prisma:migrate
+npm run prisma:seed
+npm run playwright:install
+```
+
+## Checklist de Qualidade
+
+Antes de abrir PR:
+
+- `npm run lint`
+- `npm run build`
+- `npx prisma validate`
+- testar login;
+- testar criação ou edição de modelo;
+- testar emissão individual;
+- testar emissão em lote;
+- testar download de PDF/DOCX;
+- testar validação pública;
+- testar revogação.
 
 ## Troubleshooting
 
+### `EPERM` ao rodar `prisma generate` no Windows
+
+Sintoma comum:
+
+```text
+EPERM: operation not permitted, rename query_engine-windows.dll.node
+```
+
+Possíveis causas:
+
+- servidor Next.js ainda rodando;
+- processo Node segurando o Prisma Client;
+- antivírus ou indexador bloqueando o arquivo temporariamente.
+
+Soluções:
+
+1. Pare servidores `npm run dev`.
+2. Encerre processos Node ligados ao projeto.
+3. Rode novamente:
+
+```bash
+npm run prisma:generate
+```
+
 ### Erro de conexão com Supabase
 
-Use o pooler:
+Confirme:
+
+- `DATABASE_URL`;
+- senha do banco;
+- porta;
+- modo pooled ou direto;
+- IP allowlist, quando aplicável.
+
+Exemplo pooled:
 
 ```env
 DATABASE_URL="postgresql://postgres:SENHA@db.PROJECT_REF.supabase.co:6543/postgres?schema=public&pgbouncer=true&connection_limit=5&pool_timeout=20"
 ```
 
-### Erro ao gerar PDF com Playwright
+### PDF não é gerado com fidelidade esperada
 
-O sistema possui fallback com `pdf-lib`. Para habilitar renderização HTML/CSS completa, instale o Chromium:
+Verifique se o Chromium está instalado:
 
 ```bash
-npx playwright install chromium
+npm run playwright:install
 ```
 
-### DOCX não detecta campos
+Quando Playwright não está disponível, o sistema usa fallback baseado em `pdf-lib`.
 
-O arquivo precisa ter placeholders como:
+### DOCX não detecta variáveis
+
+Confirme se o documento usa placeholders no formato:
 
 ```text
 {{nome}}
-{{curso}}
+{{empresa}}
 {{data}}
 ```
 
-Sem placeholders, o sistema mostra o preview e permite marcar campos manualmente.
+Textos visualmente parecidos, mas quebrados em múltiplos runs internos do Word, podem não ser detectados como placeholders simples.
 
 ## Segurança
 
-- `.env` e `.env.local` não devem ser commitados.
-- `SUPABASE_SERVICE_ROLE_KEY` só pode ser usada no servidor.
-- Senhas são armazenadas com hash `bcrypt`.
-- Sessões usam cookie HTTP-only.
+- Nunca commitar `.env` ou `.env.local`.
+- Nunca expor `SUPABASE_SERVICE_ROLE_KEY` no frontend.
+- Trocar `SESSION_SECRET` em produção.
+- Trocar senha inicial do administrador.
+- Usar HTTPS em produção.
+- Manter bucket de certificados privado.
+- Revisar permissões de operadores.
 
-## Próximos Passos Técnicos
+## Roadmap Técnico
 
-- Melhorar renderização visual de DOCX com conversão mais fiel.
-- Adicionar editor drag-and-drop real para mover campos no canvas.
-- Suportar múltiplas páginas de PDF.
-- Implementar revogação com motivo editável.
-- Adicionar auditoria de emissões por usuário.
+Melhorias naturais para próximas versões:
+
+- auditoria detalhada de ações administrativas;
+- motivo de revogação editável;
+- suporte completo a múltiplas páginas de PDF;
+- preview mais fiel de DOCX complexos;
+- fila persistente para lotes muito grandes;
+- retentativa de linhas com erro em lote;
+- exportação do histórico em CSV/XLSX;
+- testes automatizados para APIs críticas;
+- testes end-to-end para emissão, download e validação.
