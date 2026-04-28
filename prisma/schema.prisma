@@ -1,0 +1,114 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  OPERADOR
+}
+
+enum CertificateStatus {
+  ISSUED
+  REVOKED
+}
+
+enum GeneratedFileType {
+  PDF
+  DOCX
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(OPERADOR)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  templates CertificateTemplate[]
+  issues    CertificateIssue[]
+}
+
+model CertificateTemplate {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  width       Int      @default(1123)
+  height      Int      @default(794)
+  orientation String   @default("landscape")
+  background  String?
+  layout      Json
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdById String
+  createdBy   User @relation(fields: [createdById], references: [id])
+
+  variables TemplateVariable[]
+  issues    CertificateIssue[]
+}
+
+model TemplateVariable {
+  id          String   @id @default(cuid())
+  key         String
+  label       String
+  required    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  templateId String
+  template   CertificateTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, key])
+}
+
+model CertificateRecipient {
+  id        String   @id @default(cuid())
+  name      String
+  email     String?
+  document  String?
+  createdAt DateTime @default(now())
+
+  issues CertificateIssue[]
+}
+
+model CertificateIssue {
+  id               String            @id @default(cuid())
+  verificationCode String            @unique
+  status           CertificateStatus @default(ISSUED)
+  values           Json
+  issuedAt         DateTime          @default(now())
+  revokedAt        DateTime?
+  revokeReason     String?
+
+  templateId String
+  template   CertificateTemplate @relation(fields: [templateId], references: [id])
+
+  recipientId String
+  recipient   CertificateRecipient @relation(fields: [recipientId], references: [id])
+
+  issuedById String
+  issuedBy   User @relation(fields: [issuedById], references: [id])
+
+  files GeneratedFile[]
+}
+
+model GeneratedFile {
+  id        String            @id @default(cuid())
+  type      GeneratedFileType
+  filename  String
+  mimeType  String
+  content   Bytes?
+  storagePath String?
+  createdAt DateTime          @default(now())
+
+  issueId String
+  issue   CertificateIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([issueId, type])
+}
