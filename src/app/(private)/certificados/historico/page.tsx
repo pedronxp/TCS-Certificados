@@ -30,13 +30,10 @@ export default async function CertificateHistoryPage({
   const filters = parseFilters(params);
   const where = buildWhere(filters);
 
-  const total = await prisma.certificateIssue.count({ where });
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const page = Math.min(filters.page, totalPages);
-  const issues = await prisma.certificateIssue.findMany({
+  const rows = await prisma.certificateIssue.findMany({
     where,
-    take: pageSize,
-    skip: (page - 1) * pageSize,
+    take: pageSize + 1,
+    skip: (filters.page - 1) * pageSize,
     select: {
       id: true,
       verificationCode: true,
@@ -63,8 +60,10 @@ export default async function CertificateHistoryPage({
     },
     orderBy: [{ issuedAt: "desc" }, { id: "desc" }],
   });
-  const start = total ? (page - 1) * pageSize + 1 : 0;
-  const end = Math.min(page * pageSize, total);
+  const hasNextPage = rows.length > pageSize;
+  const issues = rows.slice(0, pageSize);
+  const start = issues.length ? (filters.page - 1) * pageSize + 1 : 0;
+  const end = start + issues.length - 1;
 
   return (
     <div>
@@ -76,8 +75,8 @@ export default async function CertificateHistoryPage({
           </p>
         </div>
         <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm">
-          <p className="font-bold text-slate-950">{total}</p>
-          <p className="text-slate-500">{total === 1 ? "registro encontrado" : "registros encontrados"}</p>
+          <p className="font-bold text-slate-950">{issues.length}</p>
+          <p className="text-slate-500">{issues.length === 1 ? "registro nesta página" : "registros nesta página"}</p>
         </div>
       </div>
 
@@ -189,21 +188,21 @@ export default async function CertificateHistoryPage({
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm text-slate-600">
           <p>
-            Mostrando {start}-{end} de {total}
+            Mostrando {start}-{end}
           </p>
           <div className="flex items-center gap-2">
             <PaginationLink
-              href={historyHref(filters, page - 1)}
-              disabled={page <= 1}
+              href={historyHref(filters, filters.page - 1)}
+              disabled={filters.page <= 1}
               label="Página anterior"
               icon="previous"
             />
             <span className="min-w-24 text-center font-medium text-slate-700">
-              Página {page} de {totalPages}
+              Página {filters.page}
             </span>
             <PaginationLink
-              href={historyHref(filters, page + 1)}
-              disabled={page >= totalPages}
+              href={historyHref(filters, filters.page + 1)}
+              disabled={!hasNextPage}
               label="Próxima página"
               icon="next"
             />
