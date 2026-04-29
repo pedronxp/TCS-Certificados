@@ -15,6 +15,7 @@ const dateFormatter = new Intl.DateTimeFormat("pt-BR", {
 
 type HistorySearchParams = Promise<{
   q?: string | string[];
+  company?: string | string[];
   status?: string | string[];
   from?: string | string[];
   to?: string | string[];
@@ -81,7 +82,7 @@ export default async function CertificateHistoryPage({
         </div>
       </div>
 
-      <form className="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:grid-cols-[minmax(18rem,1fr)_10rem_10rem_10rem_auto]">
+      <form className="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_10rem_10rem_10rem_auto]">
         <label className="field">
           <span>Buscar</span>
           <div className="relative">
@@ -93,6 +94,15 @@ export default async function CertificateHistoryPage({
               className="pl-9"
             />
           </div>
+        </label>
+
+        <label className="field">
+          <span>Empresa</span>
+          <input
+            name="company"
+            defaultValue={filters.company}
+            placeholder="Nome da empresa"
+          />
         </label>
 
         <label className="field">
@@ -222,6 +232,7 @@ function parseFilters(params: Awaited<HistorySearchParams>) {
 
   return {
     q: firstParam(params.q).trim(),
+    company: firstParam(params.company).trim(),
     status: certificateStatuses.includes(status as CertificateStatus) ? (status as CertificateStatus) : undefined,
     from: normalizeDateInput(firstParam(params.from)),
     to: normalizeDateInput(firstParam(params.to)),
@@ -266,6 +277,27 @@ function buildWhere(filters: ReturnType<typeof parseFilters>): Prisma.Certificat
     and.push({ status: filters.status });
   }
 
+  if (filters.company) {
+    and.push({
+      OR: [
+        {
+          values: {
+            path: ["empresa"],
+            string_contains: filters.company,
+            mode: "insensitive",
+          },
+        },
+        {
+          values: {
+            path: ["company"],
+            string_contains: filters.company,
+            mode: "insensitive",
+          },
+        },
+      ],
+    });
+  }
+
   if (filters.from || filters.to) {
     and.push({
       issuedAt: {
@@ -301,6 +333,7 @@ function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
   const params = new URLSearchParams();
 
   if (filters.q) params.set("q", filters.q);
+  if (filters.company) params.set("company", filters.company);
   if (filters.status) params.set("status", filters.status);
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
