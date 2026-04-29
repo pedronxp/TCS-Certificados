@@ -82,8 +82,8 @@ export default async function CertificateHistoryPage({
         </div>
       </div>
 
-      <form className="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:grid-cols-[minmax(16rem,1fr)_minmax(14rem,18rem)_10rem_10rem_10rem_auto]">
-        <label className="field">
+      <form className="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:grid-cols-12">
+        <label className="field lg:col-span-4">
           <span>Buscar</span>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
@@ -96,7 +96,7 @@ export default async function CertificateHistoryPage({
           </div>
         </label>
 
-        <label className="field">
+        <label className="field lg:col-span-3">
           <span>Empresa</span>
           <input
             name="company"
@@ -105,7 +105,7 @@ export default async function CertificateHistoryPage({
           />
         </label>
 
-        <label className="field">
+        <label className="field lg:col-span-2">
           <span>Status</span>
           <select name="status" defaultValue={filters.status ?? ""}>
             <option value="">Todos</option>
@@ -114,17 +114,17 @@ export default async function CertificateHistoryPage({
           </select>
         </label>
 
-        <label className="field">
+        <label className="field lg:col-span-1">
           <span>De</span>
           <input name="from" type="date" defaultValue={filters.from} />
         </label>
 
-        <label className="field">
+        <label className="field lg:col-span-1">
           <span>Até</span>
           <input name="to" type="date" defaultValue={filters.to} />
         </label>
 
-        <div className="flex items-end gap-2">
+        <div className="flex items-end gap-2 lg:col-span-1">
           <button className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800">
             <Search className="size-4" />
             Filtrar
