@@ -6,22 +6,34 @@ import { prisma } from "@/lib/prisma";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const templates = await prisma.certificateTemplate.count();
-  const issues = await prisma.certificateIssue.count();
-  const users = await prisma.user.count();
-  const latestIssues = await prisma.certificateIssue.findMany({
-    take: 5,
-    include: { recipient: true, template: true },
-    orderBy: { issuedAt: "desc" },
-  });
-  const recentTemplates = await prisma.certificateTemplate.findMany({
-    take: 6,
-    include: {
-      variables: true,
-      _count: { select: { issues: true } },
-    },
-    orderBy: { updatedAt: "desc" },
-  });
+  const [templates, issues, users, latestIssues, recentTemplates] = await Promise.all([
+    prisma.certificateTemplate.count(),
+    prisma.certificateIssue.count(),
+    prisma.user.count(),
+    prisma.certificateIssue.findMany({
+      take: 5,
+      select: {
+        id: true,
+        verificationCode: true,
+        issuedAt: true,
+        recipient: { select: { name: true } },
+        template: { select: { name: true } },
+      },
+      orderBy: { issuedAt: "desc" },
+    }),
+    prisma.certificateTemplate.findMany({
+      take: 6,
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        orientation: true,
+        variables: { select: { id: true } },
+        _count: { select: { issues: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
+  ]);
 
   return (
     <div>
