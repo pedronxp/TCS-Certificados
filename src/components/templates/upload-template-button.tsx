@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { FileUp } from "lucide-react";
 import { uploadedBaseLayout } from "@/lib/certificate-layout";
 import { extractDocumentPreview } from "@/lib/document-extract.client";
+import { templateImportDraftStorageKey, type TemplateImportDraft } from "@/lib/template-import-draft";
 
 export function UploadTemplateButton() {
   const router = useRouter();
@@ -21,21 +22,18 @@ export function UploadTemplateButton() {
 
   async function upload(file: File) {
     setUploading(true);
-    const dataUrl = await readFile(file);
-    const fileType = file.type || guessFileType(file.name);
-    const extracted = await extractDocumentPreview(file);
-    const layout = uploadedBaseLayout({
-      fileName: file.name,
-      fileType,
-      dataUrl,
-      previewHtml: extracted.previewHtml,
-      elements: extracted.elements,
-    });
-
-    const response = await fetch("/api/templates", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+    try {
+      const dataUrl = await readFile(file);
+      const fileType = file.type || guessFileType(file.name);
+      const extracted = await extractDocumentPreview(file);
+      const layout = uploadedBaseLayout({
+        fileName: file.name,
+        fileType,
+        dataUrl,
+        previewHtml: extracted.previewHtml,
+        elements: extracted.elements,
+      });
+      const draft: TemplateImportDraft = {
         name: file.name.replace(/\.[^.]+$/, ""),
         description: `Modelo enviado a partir de ${file.name}`,
         width: 1123,
@@ -43,24 +41,21 @@ export function UploadTemplateButton() {
         orientation: "landscape",
         background: fileType.startsWith("image/") ? dataUrl : null,
         layout,
-      }),
-    });
+      };
 
-    setUploading(false);
-    if (!response.ok) {
-      alert("Não foi possível subir o modelo.");
-      return;
+      window.sessionStorage.setItem(templateImportDraftStorageKey, JSON.stringify(draft));
+      router.push("/modelos/novo");
+    } catch {
+      alert("Não foi possível importar o modelo para edição.");
+    } finally {
+      setUploading(false);
     }
-
-    const template = await response.json();
-    router.push(`/modelos/${template.id}/editar`);
-    router.refresh();
   }
 
   return (
     <label className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50">
       <FileUp className="size-4" />
-      {uploading ? "Subindo" : "Subir modelo"}
+      {uploading ? "Importando" : "Importar modelo"}
       <input
         type="file"
         accept=".pdf,.docx,.png,.jpg,.jpeg,image/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"

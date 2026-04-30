@@ -29,14 +29,34 @@ export const templateLayoutSchema = z.object({
 export type TemplateElement = z.infer<typeof templateElementSchema>;
 export type TemplateLayout = z.infer<typeof templateLayoutSchema>;
 
+export function stripQrElements(layout: TemplateLayout): TemplateLayout {
+  return {
+    ...layout,
+    elements: layout.elements.filter((element) => element.type !== "qr"),
+  };
+}
+
 export function extractVariables(layout: TemplateLayout) {
   const variables = new Map<string, { label: string; required: boolean }>();
 
-  for (const element of layout.elements) {
-    const rawMatches = element.content.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g);
-    for (const match of rawMatches) {
-      variables.set(match[1], {
-        label: labelFromKey(match[1]),
+  for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
+    variables.set(key, {
+      label: labelFromKey(key),
+      required: true,
+    });
+  }
+
+  for (const key of extractVariableKeys(stripHtml(layout.basePreviewHtml ?? ""))) {
+    variables.set(key, {
+      label: labelFromKey(key),
+      required: true,
+    });
+  }
+
+  for (const element of stripQrElements(layout).elements) {
+    for (const key of extractVariableKeys(element.content)) {
+      variables.set(key, {
+        label: labelFromKey(key),
         required: true,
       });
     }
@@ -72,8 +92,30 @@ export function normalizeVariableKey(value: string) {
     .replace(/\s+/g, "_");
 }
 
+export function extractVariableKeys(text: string) {
+  const keys = new Set<string>();
+
+  for (const match of text.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+    const key = normalizeVariableKey(match[1]);
+    if (key) keys.add(key);
+  }
+
+  return [...keys];
+}
+
 export function fillTemplateText(text: string, values: Record<string, string>) {
-  return text.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] ?? "");
+  return text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, rawKey) => {
+    const originalKey = String(rawKey).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    return values[normalizedKey] ?? values[originalKey] ?? "";
+  });
+}
+
+function stripHtml(html: string) {
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
 }
 
 export function defaultLayout(): TemplateLayout {
@@ -126,21 +168,6 @@ export function defaultLayout(): TemplateLayout {
         align: "center",
         bold: false,
       },
-      {
-        id: "qr",
-        type: "qr",
-        content: "",
-        variableRequired: true,
-        x: 955,
-        y: 630,
-        width: 105,
-        height: 105,
-        fontSize: 12,
-        fontFamily: "Arial",
-        color: "#111827",
-        align: "center",
-        bold: false,
-      },
     ],
   };
 }
@@ -163,28 +190,11 @@ export function uploadedBaseLayout({
     baseFileType: fileType,
     baseFileDataUrl: dataUrl,
     basePreviewHtml: previewHtml,
-    elements: [
-      ...(elements ?? []),
-      {
-        id: "qr",
-        type: "qr",
-        content: "",
-        variableRequired: true,
-        x: 965,
-        y: 635,
-        width: 105,
-        height: 105,
-        fontSize: 12,
-        fontFamily: "Arial",
-        color: "#111827",
-        align: "center",
-        bold: false,
-      },
-    ],
+    elements: stripQrElements({ elements: elements ?? [] }).elements,
   };
 }
 
 export function isDefaultStarterLayout(layout: TemplateLayout) {
-  const ids = layout.elements.map((element) => element.id).sort();
-  return ids.join(",") === "body,qr,recipient,title";
+  const ids = stripQrElements(layout).elements.map((element) => element.id).sort();
+  return ids.join(",") === "body,recipient,title";
 }

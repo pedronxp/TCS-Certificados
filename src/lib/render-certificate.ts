@@ -2,8 +2,7 @@ import { Document, Packer, Paragraph, TextRun } from "docx";
 import Docxtemplater from "docxtemplater";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import PizZip from "pizzip";
-import QRCode from "qrcode";
-import { fillTemplateText, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import { extractVariableKeys, fillTemplateText, normalizeVariableKey, stripQrElements, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
 
 export type RenderInput = {
   template: {
@@ -19,9 +18,7 @@ export type RenderInput = {
 };
 
 export async function renderCertificateHtml(input: RenderInput) {
-  const layout = templateLayoutSchema.parse(input.template.layout);
-  const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
-  const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
+  const layout = stripQrElements(templateLayoutSchema.parse(input.template.layout));
 
   return certificateHtml({
     layout,
@@ -29,13 +26,11 @@ export async function renderCertificateHtml(input: RenderInput) {
     height: input.template.height,
     background: input.template.background,
     values: input.values,
-    qrDataUrl,
-    verificationCode: input.verificationCode,
   });
 }
 
 export async function renderPdfBuffer(input: RenderInput) {
-  const layout = templateLayoutSchema.parse(input.template.layout);
+  const layout = stripQrElements(templateLayoutSchema.parse(input.template.layout));
   if (layout.baseFileType === "application/pdf" && layout.baseFileDataUrl) {
     return renderPdfFromBaseTemplate(input, layout);
   }
@@ -63,7 +58,7 @@ export async function renderPdfBuffer(input: RenderInput) {
 }
 
 export async function renderDocxBuffer(input: RenderInput) {
-  const layout = templateLayoutSchema.parse(input.template.layout);
+  const layout = stripQrElements(templateLayoutSchema.parse(input.template.layout));
   if (layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl) {
     return renderDocxFromBaseTemplate(input, layout);
   }
@@ -121,9 +116,6 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
   const { width: pageWidth, height: pageHeight } = firstPage.getSize();
   const regularFont = await pdfDocument.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDocument.embedFont(StandardFonts.HelveticaBold);
-  const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
-  const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
-  const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
 
   for (const element of layout.elements) {
     const x = (element.x / input.template.width) * pageWidth;
@@ -134,12 +126,6 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
     const y = pageHeight - yFromTop - elementHeight + Math.max(4, elementHeight / 2 - fontSize / 2);
 
     if (element.type === "qr") {
-      firstPage.drawImage(qrImage, {
-        x,
-        y: pageHeight - yFromTop - elementHeight,
-        width: Math.min(elementWidth, elementHeight),
-        height: Math.min(elementWidth, elementHeight),
-      });
       continue;
     }
 
@@ -176,9 +162,6 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
   const page = pdfDocument.addPage([input.template.width, input.template.height]);
   const regularFont = await pdfDocument.embedFont(StandardFonts.Helvetica);
   const boldFont = await pdfDocument.embedFont(StandardFonts.HelveticaBold);
-  const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
-  const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
-  const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
 
   page.drawRectangle({
     x: 0,
@@ -208,12 +191,6 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
     const y = input.template.height - element.y - element.height + Math.max(4, element.height / 2 - element.fontSize / 2);
 
     if (element.type === "qr") {
-      page.drawImage(qrImage, {
-        x: element.x,
-        y: input.template.height - element.y - element.height,
-        width: Math.min(element.width, element.height),
-        height: Math.min(element.width, element.height),
-      });
       continue;
     }
 
@@ -254,7 +231,7 @@ function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) 
   });
 
   document.render({
-    ...input.values,
+    ...expandTemplateValues(input.values, layout.basePreviewHtml ?? ""),
     verificationCode: input.verificationCode,
     codigo_validacao: input.verificationCode,
   });
@@ -283,17 +260,18 @@ function certificateHtml({
   height,
   background,
   values,
-  qrDataUrl,
-  verificationCode,
 }: {
   layout: TemplateLayout;
   width: number;
   height: number;
   background: string | null;
   values: Record<string, string>;
-  qrDataUrl: string;
-  verificationCode: string;
 }) {
+  const basePreview = layout.baseFileType?.includes("wordprocessingml") && layout.basePreviewHtml
+    ? `<div class="base-preview">${fillTemplateHtml(layout.basePreviewHtml, values)}</div>`
+    : "";
+  const baseVariableKeys = new Set(extractVariableKeys(layout.basePreviewHtml ?? ""));
+
   const elements = layout.elements
     .map((element) => {
       const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};text-align:${element.align};display:flex;align-items:center;justify-content:${justify(element.align)};overflow:hidden;`;
@@ -303,7 +281,11 @@ function certificateHtml({
       }
 
       if (element.type === "qr") {
-        return `<div style="${common};flex-direction:column;gap:6px;"><img src="${qrDataUrl}" style="width:${Math.min(element.width, element.height)}px;height:${Math.min(element.width, element.height)}px;" /><span style="font-size:10px;color:#334155;">${verificationCode}</span></div>`;
+        return "";
+      }
+
+      if (element.type === "variable" && element.variableKey && baseVariableKeys.has(element.variableKey)) {
+        return "";
       }
 
       const text =
@@ -315,7 +297,7 @@ function certificateHtml({
     })
     .join("");
 
-  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff}.page{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:#f8fafc;${background ? `background-image:url('${background}');background-size:cover;background-position:center;` : ""}.page:before{content:"";position:absolute;inset:24px;border:2px solid #0f766e;pointer-events:none}.page:after{content:"";position:absolute;inset:38px;border:1px solid #94a3b8;pointer-events:none}</style></head><body><main class="page">${elements}</main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff}.page{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:#f8fafc;${background ? `background-image:url('${background}');background-size:cover;background-position:center;` : ""}.page:before{content:"";position:absolute;inset:24px;border:2px solid #0f766e;pointer-events:none}.page:after{content:"";position:absolute;inset:38px;border:1px solid #94a3b8;pointer-events:none}.base-preview{position:absolute;inset:0;overflow:hidden;background:#fff;padding:32px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.45}.base-preview p{margin:0 0 10px}.base-preview table{border-collapse:collapse;width:100%}.base-preview td,.base-preview th{border:1px solid #cbd5e1;padding:6px}.base-preview h1,.base-preview h2,.base-preview h3{margin:0 0 12px}</style></head><body><main class="page">${basePreview}${elements}</main></body></html>`;
 }
 
 function justify(align: "left" | "center" | "right") {
@@ -330,4 +312,26 @@ function escapeHtml(value: string) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function fillTemplateHtml(html: string, values: Record<string, string>) {
+  return html.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, rawKey) => {
+    const originalKey = String(rawKey).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    return escapeHtml(values[normalizedKey] ?? values[originalKey] ?? "");
+  });
+}
+
+function expandTemplateValues(values: Record<string, string>, sourceText: string) {
+  const expanded = { ...values };
+
+  for (const match of sourceText.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+    const originalKey = String(match[1]).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    if (expanded[originalKey] === undefined && values[normalizedKey] !== undefined) {
+      expanded[originalKey] = values[normalizedKey];
+    }
+  }
+
+  return expanded;
 }
