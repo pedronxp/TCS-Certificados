@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { defaultLayout, extractVariables, stripQrElements, templateLayoutSchema } from "@/lib/certificate-layout";
+import { defaultLayout, extractVariables, templateLayoutSchema } from "@/lib/certificate-layout";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
@@ -16,7 +16,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await requireAdmin();
   const body = await request.json();
-  const layout = stripQrElements(templateLayoutSchema.parse(body.layout ?? defaultLayout()));
+  const layout = templateLayoutSchema.parse(body.layout ?? defaultLayout());
   const variables = extractVariables(layout);
 
   const template = await prisma.certificateTemplate.create({

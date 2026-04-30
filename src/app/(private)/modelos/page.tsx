@@ -18,7 +18,7 @@ export default async function TemplatesPage() {
       <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Modelos</h1>
-          <p className="mt-1 text-sm text-slate-500">Crie layouts com variáveis de preenchimento e validação por código.</p>
+          <p className="mt-1 text-sm text-slate-500">Crie layouts com variáveis e QR Code de validação.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <UploadTemplateButton />
