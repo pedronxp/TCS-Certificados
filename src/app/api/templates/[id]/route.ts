@@ -91,6 +91,44 @@ export async function DELETE(
 ) {
   await requireAdmin();
   const { id } = await context.params;
-  await prisma.certificateTemplate.delete({ where: { id } });
+
+  const template = await prisma.certificateTemplate.findUnique({
+    where: { id },
+    select: {
+      _count: {
+        select: {
+          batches: true,
+          issues: true,
+        },
+      },
+    },
+  });
+
+  if (!template) return NextResponse.json({ error: "Modelo não encontrado." }, { status: 404 });
+
+  if (template._count.issues > 0 || template._count.batches > 0) {
+    return NextResponse.json(
+      {
+        error: "Este modelo não pode ser excluído porque possui emissões ou lotes vinculados.",
+      },
+      { status: 409 },
+    );
+  }
+
+  try {
+    await prisma.certificateTemplate.delete({ where: { id } });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003") {
+      return NextResponse.json(
+        {
+          error: "Este modelo não pode ser excluído porque possui emissões ou lotes vinculados.",
+        },
+        { status: 409 },
+      );
+    }
+
+    throw error;
+  }
+
   return NextResponse.json({ ok: true });
 }

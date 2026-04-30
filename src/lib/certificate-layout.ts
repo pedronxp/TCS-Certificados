@@ -18,29 +18,73 @@ export const templateElementSchema = z.object({
   bold: z.boolean().default(false),
 });
 
+export const templateVariableDefinitionSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  required: z.boolean().default(true),
+});
+
+export const templatePageBorderSchema = z.object({
+  color: z.string().default("#000000"),
+  width: z.number().default(1),
+  inset: z.number().default(0),
+});
+
 export const templateLayoutSchema = z.object({
   elements: z.array(templateElementSchema).default([]),
+  variableDefinitions: z.array(templateVariableDefinitionSchema).optional(),
   baseFileName: z.string().optional(),
   baseFileType: z.string().optional(),
   baseFileDataUrl: z.string().optional(),
   basePreviewHtml: z.string().optional(),
+  baseRenderDataUrl: z.string().optional(),
+  baseRenderFileType: z.string().optional(),
+  baseRenderEngine: z.string().optional(),
+  baseImageDataUrl: z.string().optional(),
+  baseImageEngine: z.string().optional(),
+  basePageBorder: templatePageBorderSchema.optional(),
 });
 
 export type TemplateElement = z.infer<typeof templateElementSchema>;
 export type TemplateLayout = z.infer<typeof templateLayoutSchema>;
+export type TemplateVariableDefinition = z.infer<typeof templateVariableDefinitionSchema>;
+export type TemplatePageBorder = z.infer<typeof templatePageBorderSchema>;
 
 export function extractVariables(layout: TemplateLayout) {
   const variables = new Map<string, { label: string; required: boolean }>();
 
+  for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
+    variables.set(key, {
+      label: labelFromKey(key),
+      required: true,
+    });
+  }
+
+  for (const key of extractVariableKeys(stripHtml(layout.basePreviewHtml ?? ""))) {
+    variables.set(key, {
+      label: labelFromKey(key),
+      required: true,
+    });
+  }
+
   for (const element of layout.elements) {
-    const rawMatches = element.content.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g);
-    for (const match of rawMatches) {
-      variables.set(match[1], {
-        label: labelFromKey(match[1]),
+    for (const key of extractVariableKeys(element.content)) {
+      variables.set(key, {
+        label: labelFromKey(key),
         required: true,
       });
     }
+  }
 
+  for (const definition of layout.variableDefinitions ?? []) {
+    if (!definition.key) continue;
+    variables.set(definition.key, {
+      label: definition.label?.trim() || labelFromKey(definition.key),
+      required: definition.required,
+    });
+  }
+
+  for (const element of layout.elements) {
     if (element.type === "variable" && element.variableKey) {
       variables.set(element.variableKey, {
         label: element.variableLabel?.trim() || labelFromKey(element.variableKey),
@@ -57,6 +101,17 @@ export function extractVariables(layout: TemplateLayout) {
 }
 
 export function labelFromKey(key: string) {
+  const normalizedKey = normalizeVariableKey(key);
+
+  if (
+    normalizedKey === "data_extenso" ||
+    normalizedKey === "data_extensa" ||
+    normalizedKey === "data_por_extenso" ||
+    normalizedKey === "data_por_extensa"
+  ) {
+    return "Data por Extenso";
+  }
+
   return key
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
@@ -72,8 +127,30 @@ export function normalizeVariableKey(value: string) {
     .replace(/\s+/g, "_");
 }
 
+export function extractVariableKeys(text: string) {
+  const keys = new Set<string>();
+
+  for (const match of text.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+    const key = normalizeVariableKey(match[1]);
+    if (key) keys.add(key);
+  }
+
+  return [...keys];
+}
+
 export function fillTemplateText(text: string, values: Record<string, string>) {
-  return text.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => values[key] ?? "");
+  return text.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, rawKey) => {
+    const originalKey = String(rawKey).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    return values[normalizedKey] ?? values[originalKey] ?? "";
+  });
+}
+
+function stripHtml(html: string) {
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
 }
 
 export function defaultLayout(): TemplateLayout {
@@ -150,37 +227,38 @@ export function uploadedBaseLayout({
   fileType,
   dataUrl,
   previewHtml,
+  renderDataUrl,
+  renderFileType,
+  renderEngine,
+  imageDataUrl,
+  imageEngine,
   elements,
+  pageBorder,
 }: {
   fileName: string;
   fileType: string;
-  dataUrl: string;
+  dataUrl?: string;
   previewHtml?: string;
+  renderDataUrl?: string;
+  renderFileType?: string;
+  renderEngine?: string;
+  imageDataUrl?: string;
+  imageEngine?: string;
   elements?: TemplateElement[];
+  pageBorder?: TemplatePageBorder;
 }): TemplateLayout {
   return {
     baseFileName: fileName,
     baseFileType: fileType,
     baseFileDataUrl: dataUrl,
     basePreviewHtml: previewHtml,
-    elements: [
-      ...(elements ?? []),
-      {
-        id: "qr",
-        type: "qr",
-        content: "",
-        variableRequired: true,
-        x: 965,
-        y: 635,
-        width: 105,
-        height: 105,
-        fontSize: 12,
-        fontFamily: "Arial",
-        color: "#111827",
-        align: "center",
-        bold: false,
-      },
-    ],
+    baseRenderDataUrl: renderDataUrl,
+    baseRenderFileType: renderFileType,
+    baseRenderEngine: renderEngine,
+    baseImageDataUrl: imageDataUrl,
+    baseImageEngine: imageEngine,
+    basePageBorder: pageBorder,
+    elements: elements ?? [],
   };
 }
 

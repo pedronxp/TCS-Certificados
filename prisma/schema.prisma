@@ -99,6 +99,7 @@ model CertificateIssue {
   issuedAt         DateTime          @default(now())
   revokedAt        DateTime?
   revokeReason     String?
+  deleteAt         DateTime?
 
   templateId String
   template   CertificateTemplate @relation(fields: [templateId], references: [id])
@@ -120,6 +121,7 @@ model CertificateIssue {
   @@index([recipientId, issuedAt])
   @@index([issuedById, issuedAt])
   @@index([batchId, issuedAt])
+  @@index([deleteAt])
 }
 
 model CertificateBatch {

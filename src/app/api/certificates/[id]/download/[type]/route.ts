@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { deleteExpiredCertificateIssues } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
 import { downloadCertificateFile } from "@/lib/supabase";
 
@@ -8,6 +9,10 @@ export async function GET(
   context: { params: Promise<{ id: string; type: string }> },
 ) {
   await requireUser();
+  await deleteExpiredCertificateIssues().catch((error) => {
+    console.error("Falha ao limpar certificados com prazo vencido", error);
+  });
+
   const { id, type } = await context.params;
   const file = await prisma.generatedFile.findFirst({
     where: { issueId: id, type: type.toUpperCase() === "DOCX" ? "DOCX" : "PDF" },

@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, Upload } from "lucide-react";
 import { notifyBatchJobStarted } from "@/components/certificates/batch-progress-toast";
+import { formatDateLongPtBr, isDateField, normalizeFieldKey } from "@/lib/date-fields";
 
 type BatchResult = {
   jobId?: string;
@@ -28,7 +29,7 @@ type PreviewRow = {
 };
 
 const recipientKeys = new Set(["nome", "name", "participante", "aluno", "titular"]);
-const commonKeys = new Set(["empresa", "company", "data", "date", "data_emissao", "data_de_emissao", "emissao"]);
+const companyKeys = new Set(["empresa", "company"]);
 const steps = ["Dados", "Nomes", "Revisao"];
 
 export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
@@ -46,10 +47,13 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     [templateId, templates],
   );
   const recipientKey =
-    selectedTemplate?.variables.find((variable) => recipientKeys.has(variable.key.toLowerCase()))?.key ?? "nome";
+    selectedTemplate?.variables.find((variable) => recipientKeys.has(normalizeFieldKey(variable.key)))?.key ?? "nome";
   const sharedVariables =
     selectedTemplate?.variables.filter(
-      (variable) => !recipientKeys.has(variable.key.toLowerCase()) && !commonKeys.has(variable.key.toLowerCase()),
+      (variable) =>
+        !recipientKeys.has(normalizeFieldKey(variable.key)) &&
+        !companyKeys.has(normalizeFieldKey(variable.key)) &&
+        !isDateField(variable),
     ) ?? [];
 
   const names = useMemo(() => splitNames(namesText), [namesText]);
@@ -70,11 +74,22 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     if (!canSubmit || loading) return;
 
     const form = new FormData();
+    const formattedIssuedDate = formatDateLongPtBr(issuedDate);
     form.set("templateId", templateId);
     form.set("empresa", company.trim());
-    form.set("data", issuedDate.trim());
+    form.set("data", formattedIssuedDate);
     form.set("recipientKey", recipientKey);
     form.set("names", names.join("\n"));
+
+    for (const variable of selectedTemplate?.variables ?? []) {
+      if (companyKeys.has(normalizeFieldKey(variable.key))) {
+        form.set(`values.${variable.key}`, company.trim());
+      }
+
+      if (isDateField(variable)) {
+        form.set(`values.${variable.key}`, formattedIssuedDate);
+      }
+    }
 
     for (const variable of sharedVariables) {
       form.set(`values.${variable.key}`, sharedValues[variable.key]?.trim() ?? "");
@@ -137,7 +152,12 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
               </label>
               <label className="field">
                 <span>Data</span>
-                <input value={issuedDate} required onChange={(event) => setIssuedDate(event.target.value)} />
+                <input
+                  type="date"
+                  value={issuedDate}
+                  required
+                  onChange={(event) => setIssuedDate(event.target.value)}
+                />
               </label>
               {sharedVariables.map((variable) => (
                 <label key={variable.id} className="field">
@@ -145,9 +165,16 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                   <input
                     value={sharedValues[variable.key] ?? ""}
                     required={variable.required}
+                    inputMode={isNumberOnlyVariable(variable) ? "numeric" : undefined}
+                    pattern={isNumberOnlyVariable(variable) ? "[0-9]*" : undefined}
                     placeholder={`{{${variable.key}}}`}
                     onChange={(event) =>
-                      setSharedValues((current) => ({ ...current, [variable.key]: event.target.value }))
+                      setSharedValues((current) => ({
+                        ...current,
+                        [variable.key]: isNumberOnlyVariable(variable)
+                          ? event.target.value.replace(/\D/g, "")
+                          : event.target.value,
+                      }))
                     }
                   />
                 </label>
@@ -201,7 +228,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                         <td className="px-4 py-3">{row.line}</td>
                         <td className="px-4 py-3 font-medium">{row.name || "-"}</td>
                         <td className="px-4 py-3">{company || "-"}</td>
-                        <td className="px-4 py-3">{issuedDate || "-"}</td>
+                        <td className="px-4 py-3">{formatDateLongPtBr(issuedDate) || "-"}</td>
                         <td className="px-4 py-3">
                           {row.errors.length ? (
                             <span className="font-semibold text-amber-700">{row.errors.join(", ")}</span>
@@ -326,4 +353,9 @@ function normalizeValue(value: string) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
+}
+
+function isNumberOnlyVariable(variable: { key: string; label: string }) {
+  void variable;
+  return false;
 }

@@ -64,3 +64,17 @@ export async function downloadCertificateFile(storagePath: string) {
 
   return Buffer.from(await data.arrayBuffer());
 }
+
+export async function deleteCertificateFiles(storagePaths: string[]) {
+  const supabase = getSupabaseAdmin();
+  const paths = storagePaths.filter(Boolean);
+  if (!supabase || !paths.length) return;
+
+  const { error } = await supabase.storage
+    .from(getCertificateBucket())
+    .remove(paths);
+
+  if (error) {
+    throw new Error(`Falha ao remover arquivo do Supabase Storage: ${error.message}`);
+  }
+}

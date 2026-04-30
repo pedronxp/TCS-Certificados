@@ -3,9 +3,10 @@ import { parse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
 import { requireUser } from "@/lib/auth";
 import { getBatchJob, startBatchJob } from "@/lib/batch-jobs";
+import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 
 const companyColumns = ["empresa", "company"];
-const dateColumns = ["data", "date", "data_emissao", "data_de_emissao", "emissao"];
+const dateColumns = [...DATE_FIELD_KEYS];
 
 export async function POST(request: Request) {
   const user = await requireUser();

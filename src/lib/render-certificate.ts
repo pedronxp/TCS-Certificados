@@ -1,9 +1,13 @@
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import Docxtemplater from "docxtemplater";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
 import PizZip from "pizzip";
 import QRCode from "qrcode";
-import { fillTemplateText, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import { fillTemplateText, normalizeVariableKey, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
+import { convertDocxToPdfWithCloudConvert } from "@/lib/cloudconvert";
 
 export type RenderInput = {
   template: {
@@ -38,6 +42,15 @@ export async function renderPdfBuffer(input: RenderInput) {
   const layout = templateLayoutSchema.parse(input.template.layout);
   if (layout.baseFileType === "application/pdf" && layout.baseFileDataUrl) {
     return renderPdfFromBaseTemplate(input, layout);
+  }
+  if (layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl) {
+    try {
+      const libreOfficePdf = await renderPdfFromLibreOfficeBaseTemplate(input, layout);
+      if (libreOfficePdf) return libreOfficePdf;
+      return await renderPdfFromDocxBaseTemplate(input, layout);
+    } catch (error) {
+      console.warn("Preview DOCX indisponivel; usando fallback HTML.", error);
+    }
   }
 
   try {
@@ -171,6 +184,56 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
   return Buffer.from(await pdfDocument.save());
 }
 
+async function renderPdfFromLibreOfficeBaseTemplate(input: RenderInput, layout: TemplateLayout) {
+  const docxBuffer = renderDocxFromBaseTemplate(input, layout);
+  const libreOfficePdf = await convertDocxToPdfBuffer(docxBuffer);
+  if (libreOfficePdf) return Buffer.from(libreOfficePdf);
+  const cloudConvertPdf = await convertDocxToPdfWithCloudConvert(docxBuffer);
+  return cloudConvertPdf ? Buffer.from(cloudConvertPdf) : null;
+}
+
+async function renderPdfFromDocxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
+  const docxBuffer = renderDocxFromBaseTemplate(input, layout);
+  const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
+  const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
+  const html = await docxPreviewPdfHtml({
+    docxBase64: docxBuffer.toString("base64"),
+    layout,
+    width: input.template.width,
+    height: input.template.height,
+    values: input.values,
+    qrDataUrl,
+    verificationCode: input.verificationCode,
+  });
+  const { chromium } = await import("playwright");
+  const browser = await chromium.launch({ headless: true });
+
+  try {
+    const page = await browser.newPage({
+      viewport: { width: input.template.width, height: input.template.height },
+    });
+    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await page.waitForFunction(
+      () => document.body.dataset.renderReady === "true" || Boolean(document.body.dataset.renderError),
+      undefined,
+      { timeout: 20000 },
+    );
+
+    const renderError = await page.evaluate(() => document.body.dataset.renderError ?? "");
+    if (renderError) throw new Error(renderError);
+
+    const pdf = await page.pdf({
+      width: `${input.template.width}px`,
+      height: `${input.template.height}px`,
+      printBackground: true,
+      margin: { top: "0", right: "0", bottom: "0", left: "0" },
+    });
+    return Buffer.from(pdf);
+  } finally {
+    await browser.close();
+  }
+}
+
 async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
   const pdfDocument = await PDFDocument.create();
   const page = pdfDocument.addPage([input.template.width, input.template.height]);
@@ -254,7 +317,7 @@ function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) 
   });
 
   document.render({
-    ...input.values,
+    ...expandTemplateValues(input.values, layout.basePreviewHtml ?? ""),
     verificationCode: input.verificationCode,
     codigo_validacao: input.verificationCode,
   });
@@ -294,6 +357,20 @@ function certificateHtml({
   qrDataUrl: string;
   verificationCode: string;
 }) {
+  const basePreview = layout.baseFileType?.includes("wordprocessingml") && layout.basePreviewHtml && !layout.baseFileDataUrl
+    ? `<div class="base-preview">${fillTemplateHtml(layout.basePreviewHtml, values)}</div>`
+    : "";
+  const baseImage = layout.baseImageDataUrl
+    ? `<img src="${escapeHtml(layout.baseImageDataUrl)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:fill;" />`
+    : "";
+  const showGeneratedFrame = !background && !layout.baseImageDataUrl && !layout.baseFileDataUrl && !layout.basePreviewHtml;
+  const generatedFrameCss = showGeneratedFrame
+    ? ".page:before{content:\"\";position:absolute;inset:24px;border:2px solid #0f766e;pointer-events:none}.page:after{content:\"\";position:absolute;inset:38px;border:1px solid #94a3b8;pointer-events:none}"
+    : "";
+  const baseBorder = layout.basePageBorder
+    ? `<div style="position:absolute;inset:${layout.basePageBorder.inset}px;border:${layout.basePageBorder.width}px solid ${layout.basePageBorder.color};pointer-events:none;"></div>`
+    : "";
+
   const elements = layout.elements
     .map((element) => {
       const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};text-align:${element.align};display:flex;align-items:center;justify-content:${justify(element.align)};overflow:hidden;`;
@@ -315,7 +392,95 @@ function certificateHtml({
     })
     .join("");
 
-  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff}.page{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:#f8fafc;${background ? `background-image:url('${background}');background-size:cover;background-position:center;` : ""}.page:before{content:"";position:absolute;inset:24px;border:2px solid #0f766e;pointer-events:none}.page:after{content:"";position:absolute;inset:38px;border:1px solid #94a3b8;pointer-events:none}</style></head><body><main class="page">${elements}</main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff}.page{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:${background || layout.baseImageDataUrl ? "#fff" : "#f8fafc"};${background ? `background-image:url('${background}');background-size:cover;background-position:center;` : ""}}${generatedFrameCss}.base-preview{position:absolute;inset:0;overflow:hidden;background:#fff;padding:32px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.45}.base-preview p{margin:0 0 10px}.base-preview table{border-collapse:collapse;width:100%}.base-preview td,.base-preview th{border:1px solid #cbd5e1;padding:6px}.base-preview h1,.base-preview h2,.base-preview h3{margin:0 0 12px}</style></head><body><main class="page">${baseImage}${basePreview}${baseBorder}${elements}</main></body></html>`;
+}
+
+async function docxPreviewPdfHtml({
+  docxBase64,
+  layout,
+  width,
+  height,
+  values,
+  qrDataUrl,
+  verificationCode,
+}: {
+  docxBase64: string;
+  layout: TemplateLayout;
+  width: number;
+  height: number;
+  values: Record<string, string>;
+  qrDataUrl: string;
+  verificationCode: string;
+}) {
+  const [jszipScript, docxPreviewScript] = await Promise.all([
+    readJszipBrowserScript(),
+    readDocxPreviewBrowserScript(),
+  ]);
+  const overlays = layout.elements
+    .map((element) => {
+      const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};text-align:${element.align};display:flex;align-items:center;justify-content:${justify(element.align)};overflow:hidden;z-index:3;`;
+
+      if (element.type === "image") {
+        return `<img src="${escapeHtml(element.content)}" style="${common};object-fit:contain;" />`;
+      }
+
+      if (element.type === "qr") {
+        return `<div style="${common};flex-direction:column;gap:6px;"><img src="${qrDataUrl}" style="width:${Math.min(element.width, element.height)}px;height:${Math.min(element.width, element.height)}px;" /><span style="font-size:10px;color:#334155;">${verificationCode}</span></div>`;
+      }
+
+      const text =
+        element.type === "variable" && element.variableKey
+          ? values[element.variableKey] ?? ""
+          : fillTemplateText(element.content, values);
+
+      return `<div style="${common};line-height:1.15;white-space:pre-wrap;">${escapeHtml(text)}</div>`;
+    })
+    .join("");
+  const baseBorder = layout.basePageBorder
+    ? `<div style="position:absolute;inset:${layout.basePageBorder.inset}px;border:${layout.basePageBorder.width}px solid ${layout.basePageBorder.color};pointer-events:none;z-index:2;"></div>`
+    : "";
+
+  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff;width:${width}px;height:${height}px;overflow:hidden}.page{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:#fff}.docx-root{position:absolute;inset:0;overflow:hidden;background:#fff;z-index:1}.docx-root .docx-render-wrapper{align-items:flex-start!important;background:transparent!important;padding:0!important}.docx-root section.docx-render{background:#fff!important;box-shadow:none!important;margin:0!important;width:${width}px!important;min-height:${height}px!important}.docx-root section.docx-render:not(:first-of-type){display:none!important}</style><script>${safeScript(jszipScript)}</script><script>${safeScript(docxPreviewScript)}</script></head><body><main class="page"><div id="docx-root" class="docx-root"></div>${baseBorder}${overlays}</main><script>${safeScript(`
+    (async function () {
+      try {
+        var binary = atob("${docxBase64}");
+        var bytes = new Uint8Array(binary.length);
+        for (var index = 0; index < binary.length; index += 1) {
+          bytes[index] = binary.charCodeAt(index);
+        }
+        await docx.renderAsync(bytes, document.getElementById("docx-root"), undefined, {
+          className: "docx-render",
+          inWrapper: false,
+          ignoreWidth: false,
+          ignoreHeight: false,
+          ignoreFonts: false,
+          breakPages: true,
+          ignoreLastRenderedPageBreak: false,
+          experimental: true,
+          useBase64URL: true,
+          renderHeaders: true,
+          renderFooters: true,
+          renderFootnotes: true,
+          renderEndnotes: true
+        });
+        document.body.dataset.renderReady = "true";
+      } catch (error) {
+        document.body.dataset.renderError = error && error.message ? error.message : String(error);
+      }
+    })();
+  `)}</script></body></html>`;
+}
+
+async function readJszipBrowserScript() {
+  return readFile(path.join(process.cwd(), "node_modules", "jszip", "dist", "jszip.min.js"), "utf8");
+}
+
+async function readDocxPreviewBrowserScript() {
+  return readFile(path.join(process.cwd(), "node_modules", "docx-preview", "dist", "docx-preview.min.js"), "utf8");
+}
+
+function safeScript(value: string) {
+  return value.replaceAll("</script", "<\\/script");
 }
 
 function justify(align: "left" | "center" | "right") {
@@ -330,4 +495,26 @@ function escapeHtml(value: string) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+function fillTemplateHtml(html: string, values: Record<string, string>) {
+  return html.replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, rawKey) => {
+    const originalKey = String(rawKey).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    return escapeHtml(values[normalizedKey] ?? values[originalKey] ?? "");
+  });
+}
+
+function expandTemplateValues(values: Record<string, string>, sourceText: string) {
+  const expanded = { ...values };
+
+  for (const match of sourceText.matchAll(/\{\{\s*([^{}]+?)\s*\}\}/g)) {
+    const originalKey = String(match[1]).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    if (expanded[originalKey] === undefined && values[normalizedKey] !== undefined) {
+      expanded[originalKey] = values[normalizedKey];
+    }
+  }
+
+  return expanded;
 }

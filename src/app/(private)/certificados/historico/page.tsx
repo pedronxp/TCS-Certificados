@@ -1,17 +1,15 @@
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import type { CertificateStatus, Prisma } from "@prisma/client";
-import { RevokeButton } from "@/components/certificates/revoke-button";
+import { HistoryTable, type HistoryIssue } from "@/components/certificates/history-table";
+import { requireUser } from "@/lib/auth";
+import { deleteExpiredCertificateIssues } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
 
 const pageSize = 25;
 const certificateStatuses = ["ISSUED", "REVOKED"] satisfies CertificateStatus[];
-const dateFormatter = new Intl.DateTimeFormat("pt-BR", {
-  dateStyle: "short",
-  timeStyle: "short",
-});
 
 type HistorySearchParams = Promise<{
   q?: string | string[];
@@ -27,9 +25,15 @@ export default async function CertificateHistoryPage({
 }: {
   searchParams: HistorySearchParams;
 }) {
+  const user = await requireUser();
+  await deleteExpiredCertificateIssues().catch((error) => {
+    console.error("Falha ao limpar certificados com prazo vencido", error);
+  });
+
   const params = await searchParams;
   const filters = parseFilters(params);
   const where = buildWhere(filters);
+  const canManage = user.role === "ADMIN";
 
   const rows = await prisma.certificateIssue.findMany({
     where,
@@ -42,6 +46,7 @@ export default async function CertificateHistoryPage({
       issuedAt: true,
       revokedAt: true,
       values: true,
+      deleteAt: true,
       recipient: {
         select: {
           name: true,
@@ -63,7 +68,20 @@ export default async function CertificateHistoryPage({
     orderBy: [{ issuedAt: "desc" }, { id: "desc" }],
   });
   const hasNextPage = rows.length > pageSize;
-  const issues = rows.slice(0, pageSize);
+  const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => ({
+    id: issue.id,
+    verificationCode: issue.verificationCode,
+    status: issue.status,
+    issuedAt: issue.issuedAt.toISOString(),
+    revokedAt: issue.revokedAt?.toISOString() ?? null,
+    deleteAt: toDateInputValue(issue.deleteAt),
+    recipientName: issue.recipient.name,
+    recipientEmail: issue.recipient.email,
+    recipientDocument: issue.recipient.document,
+    company: getCompanyName(issue.values),
+    templateName: issue.template.name,
+    issuedByName: issue.issuedBy.name,
+  }));
   const start = issues.length ? (filters.page - 1) * pageSize + 1 : 0;
   const end = start + issues.length - 1;
 
@@ -139,67 +157,10 @@ export default async function CertificateHistoryPage({
         </div>
       </form>
 
-      <section className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1180px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-              <tr>
-                <th className="px-4 py-3">Titular</th>
-                <th className="px-4 py-3">Empresa</th>
-                <th className="px-4 py-3">Modelo</th>
-                <th className="px-4 py-3">Código</th>
-                <th className="px-4 py-3">Emissão</th>
-                <th className="px-4 py-3">Emissor</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {issues.map((issue) => (
-                <tr key={issue.id}>
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-slate-950">{issue.recipient.name}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      {[issue.recipient.email, issue.recipient.document].filter(Boolean).join(" · ") ||
-                        "Sem contato/documento"}
-                    </p>
-                  </td>
-                  <td className="px-4 py-3">{getCompanyName(issue.values)}</td>
-                  <td className="px-4 py-3">{issue.template.name}</td>
-                  <td className="px-4 py-3">
-                    <Link className="font-mono text-teal-700 hover:underline" href={`/validar/${issue.verificationCode}`}>
-                      {issue.verificationCode}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">{dateFormatter.format(issue.issuedAt)}</td>
-                  <td className="px-4 py-3">{issue.issuedBy.name}</td>
-                  <td className="px-4 py-3">
-                    <StatusBadge status={issue.status} />
-                    {issue.revokedAt ? (
-                      <p className="mt-1 text-xs text-slate-500">em {dateFormatter.format(issue.revokedAt)}</p>
-                    ) : null}
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex gap-2">
-                      <a className="rounded bg-slate-100 px-2 py-1 font-semibold hover:bg-slate-200" href={`/api/certificates/${issue.id}/download/pdf`}>PDF</a>
-                      <a className="rounded bg-slate-100 px-2 py-1 font-semibold hover:bg-slate-200" href={`/api/certificates/${issue.id}/download/docx`}>DOCX</a>
-                      <RevokeButton id={issue.id} disabled={issue.status === "REVOKED"} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {!issues.length ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-10 text-center text-sm text-slate-500">
-                    Nenhum certificado encontrado com os filtros atuais.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+      <HistoryTable issues={issues} canManage={canManage} />
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm text-slate-600">
+      <section className="overflow-hidden rounded-b-lg border-x border-b border-slate-200 bg-white">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm text-slate-600">
           <p>
             Mostrando {start}-{end}
           </p>
@@ -329,6 +290,10 @@ function normalizeDateInput(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
 }
 
+function toDateInputValue(value: Date | null) {
+  return value ? value.toISOString().slice(0, 10) : "";
+}
+
 function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
   const params = new URLSearchParams();
 
@@ -341,22 +306,6 @@ function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
 
   const query = params.toString();
   return query ? `/certificados/historico?${query}` : "/certificados/historico";
-}
-
-function StatusBadge({ status }: { status: CertificateStatus }) {
-  if (status === "REVOKED") {
-    return (
-      <span className="inline-flex rounded bg-red-50 px-2 py-1 text-xs font-bold text-red-700">
-        Revogado
-      </span>
-    );
-  }
-
-  return (
-    <span className="inline-flex rounded bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700">
-      Emitido
-    </span>
-  );
 }
 
 function PaginationLink({

@@ -8,7 +8,7 @@ const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: [Role.ADMIN, Role.OPERADOR] },
   { href: "/modelos", label: "Modelos", icon: FileText, roles: [Role.ADMIN] },
   { href: "/certificados/emitir", label: "Emitir", icon: BadgeCheck, roles: [Role.ADMIN, Role.OPERADOR] },
-  { href: "/certificados/lote", label: "Lote", icon: Upload, roles: [Role.ADMIN, Role.OPERADOR] },
+  { href: "/certificados/lote", label: "Emitir em lote", icon: Upload, roles: [Role.ADMIN, Role.OPERADOR] },
   { href: "/certificados/historico", label: "Histórico", icon: FileText, roles: [Role.ADMIN, Role.OPERADOR] },
   { href: "/usuarios", label: "Usuários", icon: Users, roles: [Role.ADMIN] },
 ] satisfies Array<{

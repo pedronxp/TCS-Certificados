@@ -1,5 +1,6 @@
 import { CertificateBatchStatus } from "@prisma/client";
 import { issueCertificate } from "@/lib/certificate-service";
+import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
 
 export async function startBatchJob({
@@ -20,13 +21,22 @@ export async function startBatchJob({
       createdBy: { connect: { id: issuedById } },
       total: rows.length,
       values: firstRow,
-      company: firstRow.empresa || firstRow.company || "",
-      issuedDate: firstRow.data || firstRow.date || firstRow.data_emissao || firstRow.data_de_emissao || "",
+      company: findFirstValue(firstRow, ["empresa", "company"]),
+      issuedDate: findFirstValue(firstRow, DATE_FIELD_KEYS),
     },
   });
 
   void runBatchJob({ batchId: batch.id, templateId, rows, issuedById, lineOffset });
   return batch;
+}
+
+function findFirstValue(row: Record<string, string>, keys: readonly string[]) {
+  for (const key of keys) {
+    const value = row[key]?.trim();
+    if (value) return value;
+  }
+
+  return "";
 }
 
 export async function getBatchJob(id: string, userId: string) {

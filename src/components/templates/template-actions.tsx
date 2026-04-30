@@ -19,7 +19,8 @@ export function TemplateActions({ id }: { id: string }) {
     if (!confirm("Excluir este modelo? Certificados já emitidos podem impedir a exclusão.")) return;
     const response = await fetch(`/api/templates/${id}`, { method: "DELETE" });
     if (!response.ok) {
-      alert("Não foi possível excluir o modelo.");
+      const result = (await response.json().catch(() => null)) as { error?: string } | null;
+      alert(result?.error ?? "Não foi possível excluir o modelo.");
       return;
     }
     router.refresh();

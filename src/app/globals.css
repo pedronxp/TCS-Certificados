@@ -54,6 +54,10 @@ textarea {
   outline: none;
 }
 
+.field input.with-field-affix {
+  padding-right: 4.75rem;
+}
+
 .field textarea {
   min-height: 5rem;
   resize: vertical;
@@ -80,4 +84,24 @@ textarea {
 .icon-button:hover {
   background: #f8fafc;
   color: #0f172a;
+}
+
+.docx-preview-surface {
+  pointer-events: none;
+}
+
+.docx-preview-surface .docx-render-wrapper {
+  align-items: flex-start !important;
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+.docx-preview-surface section.docx-render {
+  background: #ffffff !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+}
+
+.docx-preview-surface section.docx-render:not(:first-of-type) {
+  display: none !important;
 }

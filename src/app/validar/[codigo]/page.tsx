@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { deleteExpiredCertificateIssues } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,10 @@ export default async function ValidatePage({
   params: Promise<{ codigo: string }>;
 }) {
   const { codigo } = await params;
+  await deleteExpiredCertificateIssues().catch((error) => {
+    console.error("Falha ao limpar certificados com prazo vencido", error);
+  });
+
   const issue = await prisma.certificateIssue.findUnique({
     where: { verificationCode: codigo },
     include: { recipient: true, template: true },
