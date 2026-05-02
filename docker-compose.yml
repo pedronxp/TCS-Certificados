@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tcs-certificados-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tcs_certificados
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: tcs-certificados-gotenberg
+    restart: unless-stopped
+    ports:
+      - "3010:3000"
+
+volumes:
+  postgres-data:
