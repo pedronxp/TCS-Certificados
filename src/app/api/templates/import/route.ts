@@ -5,6 +5,7 @@ import {
   normalizeImportVariableDefinitions,
   normalizeImportVariableLabels,
 } from "@/lib/template-import-service";
+import { validateTemplateImportFile } from "@/lib/upload-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,6 +17,11 @@ export async function POST(request: Request) {
 
   if (!(file instanceof File)) {
     return NextResponse.json({ error: "Arquivo do modelo nao enviado." }, { status: 400 });
+  }
+
+  const fileError = validateTemplateImportFile(file);
+  if (fileError) {
+    return NextResponse.json({ error: fileError }, { status: 400 });
   }
 
   try {

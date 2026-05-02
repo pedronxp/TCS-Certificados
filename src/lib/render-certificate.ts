@@ -55,19 +55,23 @@ export async function renderPdfBuffer(input: RenderInput) {
     const html = await renderCertificateHtml(input);
     const { chromium } = await import("playwright");
     const browser = await chromium.launch({ headless: true });
-    const page = await browser.newPage({
-      viewport: { width: input.template.width, height: input.template.height },
-    });
-    await page.setContent(html, { waitUntil: "networkidle" });
-    const pdf = await page.pdf({
-      width: `${input.template.width}px`,
-      height: `${input.template.height}px`,
-      preferCSSPageSize: true,
-      printBackground: true,
-      margin: { top: "0", right: "0", bottom: "0", left: "0" },
-    });
-    await browser.close();
-    return Buffer.from(pdf);
+
+    try {
+      const page = await browser.newPage({
+        viewport: { width: input.template.width, height: input.template.height },
+      });
+      await page.setContent(html, { waitUntil: "networkidle" });
+      const pdf = await page.pdf({
+        width: `${input.template.width}px`,
+        height: `${input.template.height}px`,
+        preferCSSPageSize: true,
+        printBackground: true,
+        margin: { top: "0", right: "0", bottom: "0", left: "0" },
+      });
+      return Buffer.from(pdf);
+    } finally {
+      await browser.close();
+    }
   } catch (error) {
     console.warn("Playwright indisponível; usando fallback pdf-lib.", error);
     return renderPdfFallback(input, layout);

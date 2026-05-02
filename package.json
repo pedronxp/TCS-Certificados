@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "test": "tsx --test tests/**/*.test.ts",
     "start": "next start",
     "lint": "eslint",
     "prisma:generate": "prisma generate",
@@ -13,7 +14,7 @@
     "playwright:install": "playwright install chromium"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.0",
+    "@prisma/client": "^6.19.3",
     "@react-pdf/renderer": "^4.5.1",
     "@supabase/supabase-js": "^2.105.1",
     "@xmldom/xmldom": "^0.8.13",
@@ -33,11 +34,11 @@
     "pdf-lib": "^1.17.1",
     "pizzip": "^3.2.0",
     "playwright": "^1.59.1",
-    "prisma": "^6.19.0",
+    "prisma": "^6.19.3",
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "xlsx": "^0.18.5",
+    "read-excel-file": "^9.0.9",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -53,5 +54,8 @@
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5"
+  },
+  "overrides": {
+    "postcss": "8.5.10"
   }
 }

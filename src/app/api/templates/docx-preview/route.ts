@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { buildDocxPreview } from "@/lib/docx-preview-service";
+import { validateDocxFile } from "@/lib/upload-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,8 +15,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Arquivo DOCX nao enviado." }, { status: 400 });
   }
 
-  if (!file.name.toLowerCase().endsWith(".docx") && !file.type.includes("wordprocessingml")) {
-    return NextResponse.json({ error: "Envie um arquivo DOCX valido." }, { status: 400 });
+  const fileError = validateDocxFile(file);
+  if (fileError) {
+    return NextResponse.json({ error: fileError }, { status: 400 });
   }
 
   try {

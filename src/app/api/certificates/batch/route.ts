@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
 import { parse } from "csv-parse/sync";
-import * as XLSX from "xlsx";
+import { readSheet, type CellValue } from "read-excel-file/node";
 import { requireAdmin } from "@/lib/auth";
 import { getBatchJob, startBatchJob } from "@/lib/batch-jobs";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
+import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const companyColumns = ["empresa", "company"];
 const dateColumns = [...DATE_FIELD_KEYS];
@@ -15,9 +19,21 @@ export async function POST(request: Request) {
   const file = formData.get("file");
   const hasUploadedFile = file instanceof File && file.size > 0 && Boolean(file.name);
 
+  if (hasUploadedFile) {
+    const fileError = validateBatchSpreadsheetFile(file);
+    if (fileError) {
+      return NextResponse.json({ error: fileError }, { status: 400 });
+    }
+  }
+
   const rows = hasUploadedFile ? await parseRows(file) : parseManualRows(formData);
   if (!rows.length) {
     return NextResponse.json({ error: "Informe os nomes ou envie uma planilha." }, { status: 400 });
+  }
+
+  const rowCountError = validateBatchRowCount(rows.length);
+  if (rowCountError) {
+    return NextResponse.json({ error: rowCountError }, { status: 400 });
   }
 
   const batchRuleError = validateSingleCompanyAndDate(rows);
@@ -164,9 +180,24 @@ async function parseRows(file: File): Promise<Record<string, string>[]> {
     }));
   }
 
-  const workbook = XLSX.read(buffer, { type: "buffer" });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return normalizeRows(XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: "" }));
+  const [headerRow = [], ...dataRows] = await readSheet(buffer);
+  const headers = headerRow.map((value) => formatCellValue(value));
+
+  return normalizeRows(
+    dataRows
+      .map((row) => rowToObject(headers, row))
+      .filter((row) => Object.values(row).some((value) => String(value ?? "").trim())),
+  );
+}
+
+function rowToObject(headers: string[], row: Array<CellValue | null>) {
+  const data: Record<string, unknown> = {};
+
+  for (const [index, header] of headers.entries()) {
+    if (header) data[header] = row[index] ?? "";
+  }
+
+  return data;
 }
 
 function validateSingleCompanyAndDate(rows: Record<string, string>[]) {

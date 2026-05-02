@@ -309,7 +309,8 @@ Para ambientes com Supabase e Prisma, prefira a connection string recomendada pe
 | Variável | Obrigatória | Descrição |
 | --- | --- | --- |
 | `DATABASE_URL` | Sim | URL de conexão PostgreSQL usada pelo Prisma. |
-| `SESSION_SECRET` | Sim | Chave para assinar sessões JWT. Troque em produção. |
+| `SESSION_SECRET` | Sim | Chave para assinar sessões JWT. Em produção, não pode ficar vazia nem usar o valor padrão local. |
+| `ALLOW_PUBLIC_REGISTRATION` | Não | Habilita cadastro público apenas quando definido como `true`. Padrão: desativado. |
 | `NEXT_PUBLIC_APP_URL` | Sim | URL pública usada em links e QR Codes. |
 | `CERTIFICATE_RETENTION_DAYS` | Não | Quantidade padrão de dias até `deleteAt`. Padrão do projeto: `365`. |
 | `ADMIN_NAME` | Seed | Nome do admin criado pelo seed. |
@@ -328,6 +329,7 @@ Para ambientes com Supabase e Prisma, prefira a connection string recomendada pe
 | --- | --- |
 | `npm run dev` | Inicia o servidor de desenvolvimento. |
 | `npm run build` | Cria o build de produção. |
+| `npm run test` | Executa testes automatizados. |
 | `npm run start` | Roda o build de produção. |
 | `npm run lint` | Executa ESLint. |
 | `npm run prisma:generate` | Gera Prisma Client. |
@@ -464,14 +466,15 @@ Antes de publicar:
 
 1. Troque `SESSION_SECRET`.
 2. Troque `ADMIN_PASSWORD`.
-3. Configure `NEXT_PUBLIC_APP_URL` com a URL pública real.
-4. Configure HTTPS.
-5. Configure banco PostgreSQL gerenciado.
-6. Rode migrations no banco de produção.
-7. Configure bucket privado no Supabase, se usar Storage.
-8. Restrinja acesso às chaves server-side.
-9. Configure rotina de limpeza para certificados com `deleteAt` vencido.
-10. Valide geração de PDF/DOCX no ambiente final.
+3. Mantenha `ALLOW_PUBLIC_REGISTRATION="false"`, salvo se o cadastro público for intencional.
+4. Configure `NEXT_PUBLIC_APP_URL` com a URL pública real.
+5. Configure HTTPS.
+6. Configure banco PostgreSQL gerenciado.
+7. Rode migrations no banco de produção.
+8. Configure bucket privado no Supabase, se usar Storage.
+9. Restrinja acesso às chaves server-side.
+10. Configure rotina de limpeza para certificados com `deleteAt` vencido.
+11. Valide geração de PDF/DOCX no ambiente final.
 11. Rode `npm run lint`.
 12. Rode `npm run build`.
 

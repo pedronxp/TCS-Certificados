@@ -48,9 +48,9 @@ export async function GET(
     regenerationError = error instanceof Error ? error : new Error("Não foi possível gerar o arquivo do certificado.");
   }
 
-  const content = regeneratedContent
-    ?? (file.content?.length ? Buffer.from(file.content) : null)
+  const storedContent = (file.content?.length ? Buffer.from(file.content) : null)
     ?? await loadStoredFileContent(file.storagePath);
+  const content = storedContent ?? regeneratedContent;
 
   if (!content) {
     if (regenerationError) {

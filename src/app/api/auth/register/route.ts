@@ -3,6 +3,7 @@ import { z } from "zod";
 import { hash } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/auth";
+import { isPublicRegistrationEnabled } from "@/lib/env";
 
 const registerSchema = z.object({
   name: z
@@ -23,6 +24,13 @@ const registerSchema = z.object({
 
 export async function POST(request: Request) {
   try {
+    if (!isPublicRegistrationEnabled()) {
+      return NextResponse.json(
+        { error: "Cadastro publico desativado. Solicite acesso ao administrador." },
+        { status: 403 },
+      );
+    }
+
     const body = await request.json();
     const parsed = registerSchema.safeParse(body);
 
