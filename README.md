@@ -1,121 +1,251 @@
 # TCS Certificados
 
-Painel web completo para criar modelos de certificados, emitir certificados individuais ou em lote, gerar arquivos PDF/DOCX e validar autenticidade por QR Code.
+Sistema web para criar modelos de certificados, emitir certificados individuais ou em lote, gerar arquivos PDF/DOCX e validar autenticidade por código e QR Code.
 
-O projeto foi pensado para cenários administrativos em que a equipe precisa manter padronização visual, rastreabilidade das emissões e uma experiência simples para operadores que emitem muitos certificados no dia a dia.
+Este README está dividido em duas partes:
+
+- **Parte 1: Apresentação**, para entender o produto, módulos, perfis e fluxo de uso.
+- **Parte 2: Guia técnico**, para instalar, configurar, executar, testar e preparar o sistema para produção.
 
 ## Sumário
 
-- [Visão Geral](#visão-geral)
-- [Principais Recursos](#principais-recursos)
+- [Parte 1: Apresentação](#parte-1-apresentação)
+- [O que o sistema resolve](#o-que-o-sistema-resolve)
+- [Principais módulos](#principais-módulos)
+- [Perfis de acesso](#perfis-de-acesso)
+- [Fluxo de uso](#fluxo-de-uso)
+- [Validação, retenção e compartilhamento](#validação-retenção-e-compartilhamento)
+- [Parte 2: Guia técnico](#parte-2-guia-técnico)
 - [Stack](#stack)
-- [Como Rodar Localmente](#como-rodar-localmente)
-- [Como Rodar com Supabase](#como-rodar-com-supabase)
-- [Fluxos do Sistema](#fluxos-do-sistema)
-- [Emissão em Lote](#emissão-em-lote)
-- [Variáveis de Ambiente](#variáveis-de-ambiente)
-- [Comandos Úteis](#comandos-úteis)
-- [Validação e Segurança](#validação-e-segurança)
-- [Documentação Técnica](#documentação-técnica)
+- [Pré-requisitos](#pré-requisitos)
+- [Passo a passo local](#passo-a-passo-local)
+- [Configuração com Supabase](#configuração-com-supabase)
+- [Variáveis de ambiente](#variáveis-de-ambiente)
+- [Comandos úteis](#comandos-úteis)
+- [Estrutura do projeto](#estrutura-do-projeto)
+- [Rotas principais](#rotas-principais)
+- [Regras de segurança e permissão](#regras-de-segurança-e-permissão)
+- [Checklist de produção](#checklist-de-produção)
+- [Documentação complementar](#documentação-complementar)
 
-## Visão Geral
+---
 
-O TCS Certificados centraliza a vida útil de um certificado:
+# Parte 1: Apresentação
 
-1. O administrador cria um modelo visual a partir de PDF, DOCX ou imagem.
-2. O sistema identifica ou permite configurar variáveis como nome, empresa, data, curso e demais campos.
-3. O operador emite certificados individualmente ou por lote.
-4. Cada certificado recebe código de verificação, QR Code e arquivos gerados.
-5. A consulta pública confirma a autenticidade pela rota de validação.
-6. O histórico permite localizar, baixar e revogar certificados emitidos.
+## O que o sistema resolve
 
-## Principais Recursos
+O TCS Certificados centraliza a emissão e validação de certificados em um painel privado. A proposta é reduzir trabalho manual, manter padrão visual, registrar quem emitiu cada certificado e permitir que qualquer pessoa valide a autenticidade por uma URL pública.
 
-| Área | Recursos |
+O sistema atende cenários como:
+
+- empresas que emitem certificados de treinamento;
+- equipes administrativas que precisam de rastreabilidade;
+- emissão recorrente de certificados com modelos padronizados;
+- validação pública de certificados por QR Code;
+- controle de histórico por usuário e por administrador.
+
+## Principais módulos
+
+| Módulo | O que faz |
 | --- | --- |
-| Autenticação | Login com sessão JWT em cookie HTTP-only e perfis `ADMIN` e `OPERADOR`. |
-| Usuários | Cadastro e administração de usuários por perfil. |
-| Modelos | Criação, edição, duplicação e exclusão de modelos de certificados. |
-| Editor visual | Posicionamento de textos, variáveis e QR Code sobre o layout base. |
-| Emissão individual | Formulário dinâmico criado a partir das variáveis do modelo. |
-| Emissão em lote | Fluxo guiado, validação de dados, processamento assíncrono e progresso em tela. |
-| Histórico | Busca, filtros, paginação, download de arquivos e revogação. |
-| Validação pública | Página pública `/validar/[codigo]` para conferência de autenticidade. |
-| Arquivos | Geração de PDF e DOCX, com armazenamento em Supabase Storage quando configurado. |
+| Dashboard | Mostra visão geral de modelos, certificados e acessos autorizados. |
+| Modelos | Lista modelos disponíveis e exibe preview visual do certificado. |
+| Editor de modelo | Permite configurar variáveis, textos e QR Code sobre o layout do certificado. |
+| Emissão individual | Gera certificado preenchendo os campos exigidos pelo modelo. |
+| Emissão em lote | Permite ao admin gerar vários certificados a partir de uma lista de nomes/dados. |
+| Histórico | Lista certificados emitidos, status, downloads, validação e ações administrativas. |
+| Validação pública | Rota `/validar/[codigo]` para confirmar autenticidade do certificado. |
+| Usuários | Área administrativa para gerenciar acessos. |
+
+## Perfis de acesso
+
+### Administrador
+
+O administrador tem acesso completo ao painel:
+
+1. Cadastra e gerencia usuários.
+2. Cria, importa, edita e remove modelos.
+3. Emite certificados individuais.
+4. Emite certificados em lote.
+5. Visualiza o histórico geral.
+6. Revoga, oculta, programa exclusão e remove certificados.
+
+### Usuário
+
+Na interface, o perfil operacional aparece como **USUÁRIO**. No banco e no código, a role técnica permanece como `OPERADOR`.
+
+O usuário comum tem acesso reduzido:
+
+1. Emite certificados individualmente.
+2. Visualiza modelos disponíveis para emissão.
+3. Consulta apenas o próprio histórico.
+4. Baixa apenas arquivos dos certificados que ele emitiu.
+5. Não vê ações administrativas.
+6. Não emite certificados em lote.
+
+## Fluxo de uso
+
+### 1. Configuração inicial
+
+1. O administrador acessa o painel.
+2. Cria usuários autorizados.
+3. Cria ou importa modelos de certificado.
+4. Define campos obrigatórios, textos e posição do QR Code.
+
+### 2. Emissão individual
+
+1. O usuário acessa **Emitir**.
+2. Escolhe um modelo.
+3. Preenche os campos obrigatórios.
+4. O sistema gera os arquivos PDF/DOCX.
+5. O certificado fica registrado no histórico do usuário.
+
+### 3. Emissão em lote
+
+1. Apenas o administrador acessa **Emitir em lote**.
+2. Escolhe o modelo.
+3. Informa dados comuns do lote.
+4. Cola ou importa a lista de participantes.
+5. Revisa pendências e duplicidades.
+6. Inicia o processamento.
+7. Acompanha o progresso e consulta o resultado no histórico.
+
+### 4. Validação pública
+
+1. Cada certificado recebe um `verificationCode`.
+2. O certificado renderizado inclui código e QR Code.
+3. A URL pública segue o formato `/validar/[codigo]`.
+4. A página pública mostra se o certificado é válido ou revogado.
+
+## Validação, retenção e compartilhamento
+
+### Validação
+
+Sim. Cada certificado emitido recebe um código único de validação. A rota pública `/validar/[codigo]` permite consultar a autenticidade sem login.
+
+### Tempo de permanência
+
+Por padrão, certificados ficam no sistema por **365 dias**, configurado pela variável `CERTIFICATE_RETENTION_DAYS`.
+
+O administrador também pode programar exclusão usando `deleteAt`. Certificados com exclusão programada podem ser removidos por rotina de limpeza.
+
+### WhatsApp
+
+Não há integração direta com WhatsApp Business API, Twilio ou Z-API. O sistema fornece um link simples de compartilhamento para WhatsApp com a URL pública de validação.
+
+---
+
+# Parte 2: Guia técnico
 
 ## Stack
 
-- Next.js 16 com App Router e TypeScript.
+- Next.js 16 com App Router.
 - React 19.
-- Tailwind CSS.
+- TypeScript.
+- Tailwind CSS 4.
 - Prisma ORM.
 - PostgreSQL.
-- Supabase Storage para arquivos gerados.
+- Supabase Storage opcional para arquivos.
 - JWT com `jose` em cookie HTTP-only.
 - `bcryptjs` para hash de senha.
-- `pdf-lib`, `docx`, `docxtemplater`, `pizzip` e `mammoth` para geração e leitura de documentos.
-- `csv-parse` e `xlsx` para importação de planilhas.
-- Playwright para suporte de renderização quando necessário.
+- `docx`, `docxtemplater`, `pizzip`, `mammoth`, `pdf-lib` e `qrcode` para documentos.
+- `csv-parse` e `xlsx` para importação.
+- Gotenberg/LibreOffice para conversão DOCX para PDF.
+- Playwright para suporte de renderização e verificações visuais.
 
-## Como Rodar Localmente
+## Pré-requisitos
 
-### 1. Instale as dependências
+Instale antes de rodar o projeto:
+
+- Node.js compatível com o projeto.
+- npm.
+- Docker e Docker Compose.
+- Git.
+
+Recomendado para desenvolvimento:
+
+- PostgreSQL local via Docker.
+- Chromium do Playwright, instalado pelo script do projeto.
+
+## Passo a passo local
+
+### 1. Clone o repositório
+
+```bash
+git clone https://github.com/pedronxp/TCS-Certificados.git
+cd TCS-Certificados
+```
+
+### 2. Instale as dependências
 
 ```bash
 npm install
 ```
 
-### 2. Configure as variáveis de ambiente
+### 3. Crie os arquivos de ambiente
 
-O Next.js usa `.env.local` durante o desenvolvimento. O Prisma CLI usa `.env`.
+O Next.js usa `.env.local` em desenvolvimento. O Prisma CLI usa `.env`.
 
 ```bash
 cp .env.example .env.local
 cp .env.example .env
 ```
 
-Em Windows PowerShell, caso `cp` não esteja disponível:
+No Windows PowerShell:
 
 ```powershell
 Copy-Item .env.example .env.local
 Copy-Item .env.example .env
 ```
 
-### 3. Suba o PostgreSQL local
+### 4. Suba os serviços locais
 
 ```bash
 docker compose up -d
 ```
 
-O `docker-compose.yml` sobe um PostgreSQL 16 em `localhost:5432`, com banco `tcs_certificados`, usuário `postgres` e senha `postgres`. Ele também sobe o Gotenberg em `localhost:3010`, usado para converter DOCX em PDF com LibreOffice open-source.
+Esse comando sobe:
 
-### 4. Aplique as migrations e gere o Prisma Client
+- PostgreSQL 16 em `localhost:5432`;
+- banco `tcs_certificados`;
+- usuário `postgres`;
+- senha `postgres`;
+- Gotenberg em `localhost:3010` para conversão DOCX/PDF.
+
+### 5. Gere o Prisma Client
 
 ```bash
-npm run prisma:migrate
 npm run prisma:generate
 ```
 
-### 5. Crie o usuário administrador inicial
+### 6. Aplique as migrations
+
+```bash
+npm run prisma:migrate
+```
+
+### 7. Crie o administrador inicial
 
 ```bash
 npm run prisma:seed
 ```
 
-Credenciais padrão:
+Credenciais padrão de desenvolvimento:
 
 | Campo | Valor |
 | --- | --- |
 | E-mail | `admin@tcs.local` |
 | Senha | `admin123456` |
 
-### 6. Instale o Chromium do Playwright
+Troque esses valores em qualquer ambiente que não seja local.
+
+### 8. Instale o Chromium do Playwright
 
 ```bash
 npm run playwright:install
 ```
 
-### 7. Rode o painel
+### 9. Rode o servidor de desenvolvimento
 
 ```bash
 npm run dev
@@ -127,16 +257,42 @@ Acesse:
 http://localhost:3000
 ```
 
-## Como Rodar com Supabase
+### 10. Verifique o build
 
-1. Crie um projeto no Supabase.
-2. Em **Project Settings > Database**, copie a connection string Postgres e coloque em `DATABASE_URL`.
-3. Em **Project Settings > API**, copie as chaves públicas e de serviço.
-4. Em **Storage**, crie um bucket privado chamado `certificados`.
-5. Configure `.env` e `.env.local`.
-6. Rode migrations, seed e aplicação normalmente.
+Antes de abrir PR ou publicar:
 
-Exemplo de variáveis Supabase:
+```bash
+npm run lint
+npm run build
+```
+
+## Configuração com Supabase
+
+O Supabase é opcional e pode ser usado para armazenar arquivos gerados.
+
+### 1. Crie o projeto
+
+1. Acesse o Supabase.
+2. Crie um novo projeto.
+3. Copie a connection string Postgres.
+4. Configure `DATABASE_URL`.
+
+### 2. Configure as chaves
+
+No painel do Supabase:
+
+1. Acesse **Project Settings > API**.
+2. Copie a URL do projeto.
+3. Copie a chave pública.
+4. Copie a service role key para uso server-side.
+
+### 3. Configure o bucket
+
+1. Acesse **Storage**.
+2. Crie um bucket privado chamado `certificados`.
+3. Configure `SUPABASE_CERTIFICATE_BUCKET="certificados"`.
+
+Exemplo:
 
 ```env
 NEXT_PUBLIC_SUPABASE_URL="https://seu-projeto.supabase.co"
@@ -148,61 +304,14 @@ SUPABASE_CERTIFICATE_BUCKET="certificados"
 
 Para ambientes com Supabase e Prisma, prefira a connection string recomendada pelo painel do Supabase. Em alguns cenários, a URL pooled na porta `6543` ajuda a evitar falhas intermitentes de conexão.
 
-## Fluxos do Sistema
-
-### Administrador
-
-- Acessa o painel com perfil `ADMIN`.
-- Cadastra operadores.
-- Cria modelos de certificado.
-- Configura variáveis e elementos visuais.
-- Emite certificados.
-- Consulta histórico.
-- Revoga certificados quando necessário.
-
-### Operador
-
-- Acessa o painel com perfil `OPERADOR`.
-- Emite certificados usando modelos cadastrados.
-- Gera lotes.
-- Consulta histórico e baixa arquivos.
-
-### Público externo
-
-- Acessa a rota `/validar/[codigo]`.
-- Confere dados do certificado.
-- Verifica se o certificado está emitido ou revogado.
-
-## Emissão em Lote
-
-A emissão em lote foi estruturada para evitar travamentos de tela e facilitar acompanhamento de grandes volumes.
-
-O fluxo atual permite:
-
-- escolher o modelo;
-- informar dados comuns do lote, como empresa e data;
-- preencher variáveis compartilhadas;
-- colar uma lista de nomes;
-- revisar duplicidades e campos obrigatórios;
-- iniciar geração assíncrona;
-- acompanhar progresso por toast;
-- consultar os últimos lotes gerados.
-
-Regras importantes:
-
-- o lote exige empresa e data;
-- empresa e data devem ser consistentes para todos os certificados do lote;
-- cada item processado atualiza o progresso;
-- erros por linha são preservados no registro do lote;
-- certificados gerados ficam vinculados ao lote.
-
-## Variáveis de Ambiente
+## Variáveis de ambiente
 
 | Variável | Obrigatória | Descrição |
 | --- | --- | --- |
 | `DATABASE_URL` | Sim | URL de conexão PostgreSQL usada pelo Prisma. |
 | `SESSION_SECRET` | Sim | Chave para assinar sessões JWT. Troque em produção. |
-| `NEXT_PUBLIC_APP_URL` | Sim | URL pública usada para links e QR Codes. |
+| `NEXT_PUBLIC_APP_URL` | Sim | URL pública usada em links e QR Codes. |
+| `CERTIFICATE_RETENTION_DAYS` | Não | Quantidade padrão de dias até `deleteAt`. Padrão do projeto: `365`. |
 | `ADMIN_NAME` | Seed | Nome do admin criado pelo seed. |
 | `ADMIN_EMAIL` | Seed | E-mail do admin criado pelo seed. |
 | `ADMIN_PASSWORD` | Seed | Senha inicial do admin. Troque em produção. |
@@ -211,62 +320,162 @@ Regras importantes:
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Opcional | Chave publishable Supabase. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Opcional | Chave server-side para gravar arquivos no Storage. |
 | `SUPABASE_CERTIFICATE_BUCKET` | Opcional | Bucket onde PDFs e DOCXs são armazenados. |
-| `GOTENBERG_URL` | Opcional | URL da API open-source de conversão DOCX para PDF. Padrão: `http://localhost:3010`. |
+| `GOTENBERG_URL` | Opcional | URL da API Gotenberg. Padrão local: `http://localhost:3010`. |
 
-## Comandos Úteis
+## Comandos úteis
 
 | Comando | Descrição |
 | --- | --- |
 | `npm run dev` | Inicia o servidor de desenvolvimento. |
-| `npm run build` | Cria build de produção. |
+| `npm run build` | Cria o build de produção. |
 | `npm run start` | Roda o build de produção. |
 | `npm run lint` | Executa ESLint. |
 | `npm run prisma:generate` | Gera Prisma Client. |
 | `npm run prisma:migrate` | Aplica migrations em desenvolvimento. |
-| `npm run prisma:seed` | Cria dados iniciais. |
+| `npm run prisma:seed` | Cria o usuário admin inicial. |
 | `npm run playwright:install` | Instala Chromium usado pelo Playwright. |
 
-## Validação e Segurança
-
-- Senhas são armazenadas com hash `bcrypt`.
-- Sessões usam cookie HTTP-only.
-- Rotas privadas exigem usuário autenticado.
-- Perfis controlam acesso administrativo.
-- `SUPABASE_SERVICE_ROLE_KEY` fica somente no servidor.
-- Certificados emitidos recebem código único de verificação.
-- Certificados revogados continuam rastreáveis no histórico e na validação pública.
-
-## Estrutura do Projeto
+## Estrutura do projeto
 
 ```text
 prisma/
   migrations/        Migrations do banco
   schema.prisma      Modelo de dados Prisma
-  seed.ts            Criação do admin inicial
+  seed.ts            Seed do administrador inicial
+
 src/
   app/               Páginas e rotas API do Next.js
   components/        Componentes de interface
-  lib/               Regras de negócio e integrações
+  lib/               Regras de negócio, renderização e integrações
+
 docs/
   README_TECNICO.md  Documentação técnica detalhada
+  *.pptx             Material de apresentação
 ```
 
-## Documentação Técnica
+## Rotas principais
 
-Para entender arquitetura, modelo de dados, rotas, fluxos internos, geração de arquivos e troubleshooting:
+### Páginas privadas
 
-- [README técnico](docs/README_TECNICO.md)
-- Apresentação do projeto: `docs/TCS-Certificados-Apresentacao.pptx`
+| Rota | Descrição |
+| --- | --- |
+| `/dashboard` | Painel inicial. |
+| `/modelos` | Lista de modelos. |
+| `/modelos/novo` | Criação/importação de modelo. |
+| `/modelos/[id]/editar` | Editor visual do modelo. |
+| `/certificados/emitir` | Emissão individual. |
+| `/certificados/lote` | Emissão em lote para admin. |
+| `/certificados/historico` | Histórico de certificados. |
+| `/usuarios` | Gestão de usuários para admin. |
 
-## Observações de Produção
+### Páginas públicas
+
+| Rota | Descrição |
+| --- | --- |
+| `/login` | Entrada na plataforma. |
+| `/register` | Cadastro quando habilitado no fluxo. |
+| `/validar/[codigo]` | Validação pública de autenticidade. |
+
+### APIs
+
+| Rota | Descrição |
+| --- | --- |
+| `/api/auth/login` | Autenticação. |
+| `/api/auth/logout` | Encerramento de sessão. |
+| `/api/auth/register` | Cadastro de usuário. |
+| `/api/templates` | Criação e listagem de modelos. |
+| `/api/templates/[id]` | Edição, duplicação e remoção de modelo. |
+| `/api/templates/import` | Importação de modelos. |
+| `/api/certificates/issue` | Emissão individual. |
+| `/api/certificates/batch` | Emissão em lote. |
+| `/api/certificates/[id]` | Ações sobre certificado. |
+| `/api/certificates/[id]/download/[type]` | Download de PDF/DOCX. |
+| `/api/certificates/[id]/revoke` | Revogação. |
+| `/api/users` | Gestão de usuários. |
+
+## Regras de segurança e permissão
+
+- Senhas são armazenadas com hash `bcrypt`.
+- Sessões usam JWT em cookie HTTP-only.
+- Rotas privadas exigem usuário autenticado.
+- `ADMIN` acessa gestão, lote e ações administrativas.
+- `OPERADOR` aparece como **USUÁRIO** na interface.
+- Usuário comum visualiza apenas o próprio histórico.
+- Usuário comum não emite em lote.
+- Usuário comum não baixa arquivos emitidos por terceiros.
+- Certificados recebem `verificationCode` único.
+- Certificados revogados continuam rastreáveis.
+- `SUPABASE_SERVICE_ROLE_KEY` deve ficar apenas no servidor.
+
+## Solução de problemas
+
+### Prisma não conecta
+
+Verifique se o Docker está rodando e se `DATABASE_URL` aponta para:
+
+```text
+postgresql://postgres:postgres@localhost:5432/tcs_certificados?schema=public
+```
+
+Depois rode:
+
+```bash
+npm run prisma:generate
+npm run prisma:migrate
+```
+
+### PDF não é gerado a partir de DOCX
+
+Confira se o Gotenberg está disponível:
+
+```text
+http://localhost:3010
+```
+
+Se estiver usando outro serviço, configure:
+
+```env
+GOTENBERG_URL="https://sua-api-gotenberg"
+```
+
+### QR Code aponta para URL errada
+
+Confirme `NEXT_PUBLIC_APP_URL` no `.env.local` e no `.env`.
+
+Exemplo local:
+
+```env
+NEXT_PUBLIC_APP_URL="http://localhost:3000"
+```
+
+### Login do admin não funciona
+
+Rode o seed novamente:
+
+```bash
+npm run prisma:seed
+```
+
+Confirme se `ADMIN_EMAIL` e `ADMIN_PASSWORD` estão configurados antes do seed.
+
+## Checklist de produção
 
 Antes de publicar:
 
-- troque `SESSION_SECRET`;
-- troque `ADMIN_PASSWORD`;
-- confirme `NEXT_PUBLIC_APP_URL`;
-- configure HTTPS;
-- restrinja acesso ao bucket privado;
-- revise políticas de backup do banco;
-- rode `npm run build`;
-- aplique migrations no banco de produção com cuidado.
+1. Troque `SESSION_SECRET`.
+2. Troque `ADMIN_PASSWORD`.
+3. Configure `NEXT_PUBLIC_APP_URL` com a URL pública real.
+4. Configure HTTPS.
+5. Configure banco PostgreSQL gerenciado.
+6. Rode migrations no banco de produção.
+7. Configure bucket privado no Supabase, se usar Storage.
+8. Restrinja acesso às chaves server-side.
+9. Configure rotina de limpeza para certificados com `deleteAt` vencido.
+10. Valide geração de PDF/DOCX no ambiente final.
+11. Rode `npm run lint`.
+12. Rode `npm run build`.
+
+## Documentação complementar
+
+- [Documentação técnica detalhada](docs/README_TECNICO.md)
+- Apresentação do projeto: `docs/TCS-Certificados-Apresentacao.pptx`
