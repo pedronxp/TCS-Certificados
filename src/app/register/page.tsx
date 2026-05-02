@@ -1,15 +1,15 @@
 import { redirect } from "next/navigation";
-import { LoginForm } from "@/components/login-form";
+import { RegisterForm } from "@/components/register-form";
 import { CertificateCarouselServer } from "@/components/certificate-carousel-server";
 import { getSessionUser } from "@/lib/auth";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Entrar — TCS Certificados",
-  description: "Acesse o painel de emissão e validação de certificados.",
+  title: "Criar conta — TCS Certificados",
+  description: "Crie sua conta e comece a emitir certificados profissionais.",
 };
 
-export default async function LoginPage() {
+export default async function RegisterPage() {
   const user = await getSessionUser();
   if (user) redirect("/dashboard");
 
@@ -19,13 +19,13 @@ export default async function LoginPage() {
       <div className="auth-hero">
         <div className="auth-hero-grid" />
 
-        {/* Carousel area — vertically centered */}
+        {/* Carousel area */}
         <div
           style={{
             position: "absolute",
             top: "50%",
             left: "50%",
-            transform: "translate(-50%, -62%)",
+            transform: "translate(-50%, -60%)",
             width: "100%",
             maxWidth: 360,
             padding: "0 1rem",
@@ -57,14 +57,14 @@ export default async function LoginPage() {
               marginBottom: "0.75rem",
             }}
           >
-            Emissão profissional
+            Comece hoje mesmo.
             <br />
-            <span style={{ color: "rgba(255,255,255,0.8)" }}>de certificados digitais</span>
+            <span style={{ color: "rgba(255,255,255,0.8)" }}>É gratuito e rápido.</span>
           </h2>
           <p style={{ fontSize: "0.9375rem", color: "rgba(255,255,255,0.65)", lineHeight: 1.6 }}>
-            Crie, personalize e valide certificados com facilidade.
+            Crie sua conta em menos de um minuto e
             <br />
-            Gestão completa em um só lugar.
+            emita seu primeiro certificado.
           </p>
         </div>
       </div>
@@ -87,7 +87,7 @@ export default async function LoginPage() {
               lineHeight: 1.2,
             }}
           >
-            Bem-vindo de volta
+            Criar conta
           </h1>
           <p
             style={{
@@ -97,10 +97,10 @@ export default async function LoginPage() {
               marginBottom: "2rem",
             }}
           >
-            Entre com sua conta para acessar o painel.
+            Preencha os dados abaixo para começar.
           </p>
 
-          <LoginForm />
+          <RegisterForm />
 
           <p
             style={{
@@ -110,7 +110,7 @@ export default async function LoginPage() {
               color: "var(--text-muted)",
             }}
           >
-            Ao entrar, você concorda com os{" "}
+            Ao criar uma conta, você concorda com os{" "}
             <a href="#" style={{ color: "var(--brand-600)", textDecoration: "none" }}>
               Termos de Uso
             </a>{" "}

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { parse } from "csv-parse/sync";
 import * as XLSX from "xlsx";
-import { requireUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { getBatchJob, startBatchJob } from "@/lib/batch-jobs";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 
@@ -9,7 +9,7 @@ const companyColumns = ["empresa", "company"];
 const dateColumns = [...DATE_FIELD_KEYS];
 
 export async function POST(request: Request) {
-  const user = await requireUser();
+  const user = await requireAdmin();
   const formData = await request.formData();
   const templateId = String(formData.get("templateId") ?? "");
   const file = formData.get("file");
@@ -31,7 +31,7 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const user = await requireUser();
+  const user = await requireAdmin();
   const jobId = new URL(request.url).searchParams.get("jobId");
 
   if (!jobId) {
@@ -57,11 +57,14 @@ export async function GET(request: Request) {
 }
 
 function parseManualRows(formData: FormData) {
-  const names = splitNames(String(formData.get("names") ?? ""));
+  const rawNames = String(formData.get("names") ?? "");
+  const rawDocuments = String(formData.get("documents") ?? "");
   const empresa = String(formData.get("empresa") ?? "").trim();
   const data = String(formData.get("data") ?? "").trim();
   const recipientKey = String(formData.get("recipientKey") ?? "nome").trim() || "nome";
+  const documentKey = String(formData.get("documentKey") ?? "").trim();
   const sharedValues: Record<string, string> = { empresa, data };
+  const people = parseManualPeople(rawNames, rawDocuments, Boolean(documentKey));
 
   for (const [key, value] of formData.entries()) {
     if (!key.startsWith("values.")) continue;
@@ -72,11 +75,49 @@ function parseManualRows(formData: FormData) {
     }
   }
 
-  return names.map((name) => ({
-    ...sharedValues,
-    [recipientKey]: name,
-    nome: name,
-  }));
+  return people.map((person) => {
+    const row = {
+      ...sharedValues,
+      [recipientKey]: person.name,
+      nome: person.name,
+    };
+
+    if (documentKey) {
+      row[documentKey] = person.document;
+    }
+
+    return row;
+  });
+}
+
+function parseManualPeople(namesValue: string, documentsValue: string, hasDocumentKey: boolean) {
+  const documents = splitLineValues(documentsValue);
+
+  if (!hasDocumentKey) {
+    return splitNames(namesValue).map((name) => ({ name, document: "" }));
+  }
+
+  if (documents.some(Boolean)) {
+    return splitLineValues(namesValue)
+      .map((name, index) => ({ name: name.trim(), document: normalizeDocumentValue(documents[index] ?? "") }))
+      .filter((person) => person.name || person.document);
+  }
+
+  return splitLineValues(namesValue)
+    .map((line) => parsePersonLine(line))
+    .filter((person) => person.name || person.document);
+}
+
+function parsePersonLine(line: string) {
+  const value = line.trim();
+  if (!value) return { name: "", document: "" };
+
+  const separator = value.includes(";") ? ";" : value.includes("\t") ? "\t" : ",";
+  const [name, ...documentParts] = value.split(separator);
+  return {
+    name: name.trim(),
+    document: normalizeDocumentValue(documentParts.join(separator).trim()),
+  };
 }
 
 function splitNames(value: string) {
@@ -84,6 +125,31 @@ function splitNames(value: string) {
     .split(/\r?\n|;|,/)
     .map((name) => name.trim())
     .filter(Boolean);
+}
+
+function splitLineValues(value: string) {
+  return value.split(/\r?\n/).map((item) => item.trim());
+}
+
+function normalizeDocumentValue(value: string) {
+  const digits = onlyDigits(value);
+  if (digits.length === 11) return formatCpf(digits);
+  if (digits.length === 14) return formatCnpj(digits);
+  return value.trim();
+}
+
+function onlyDigits(value: string) {
+  return value.replace(/\D/g, "");
+}
+
+function formatCpf(value: string) {
+  const digits = value.slice(0, 11);
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
+}
+
+function formatCnpj(value: string) {
+  const digits = value.slice(0, 14);
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
 }
 
 async function parseRows(file: File): Promise<Record<string, string>[]> {

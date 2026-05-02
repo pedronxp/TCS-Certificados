@@ -1,9 +1,27 @@
 import { BatchForm } from "@/components/certificates/batch-form";
+import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import type { Metadata } from "next";
 
+export const metadata: Metadata = { title: "Emissão em Lote — TCS Certificados" };
 export const dynamic = "force-dynamic";
 
+function formatDateTime(value: Date) {
+  return new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "short",
+    timeStyle: "short",
+  }).format(value);
+}
+
+const BATCH_STATUS: Record<string, { label: string; cls: string }> = {
+  PENDING:    { label: "Pendente",    cls: "chip chip-warning" },
+  PROCESSING: { label: "Processando", cls: "chip chip-brand" },
+  DONE:       { label: "Concluído",   cls: "chip chip-success" },
+  FAILED:     { label: "Falha",       cls: "chip chip-danger" },
+};
+
 export default async function BatchCertificatePage() {
+  await requireAdmin();
   const [templates, batches] = await Promise.all([
     prisma.certificateTemplate.findMany({
       select: {
@@ -27,78 +45,104 @@ export default async function BatchCertificatePage() {
   ]);
 
   return (
-    <div>
-      <h1 className="text-2xl font-bold">Emissao em lote</h1>
-      <p className="mt-1 text-sm text-slate-500">
-        Gere varios certificados pelo modelo cadastrado, mantendo empresa e data iguais para todos.
-      </p>
-      <div className="mt-6">
-        {templates.length ? (
-          <BatchForm templates={templates} />
-        ) : (
-          <p className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500">
-            Crie um modelo antes de importar planilhas.
+    <div className="page-shell page-shell-wide">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Emissão em lote</h1>
+          <p className="page-subtitle">
+            Gere vários certificados pelo modelo cadastrado, mantendo empresa e data iguais para todos.
           </p>
-        )}
+        </div>
       </div>
 
-      <section className="mt-8 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="border-b border-slate-200 px-4 py-3">
-          <h2 className="text-base font-bold">Historico de lotes</h2>
-          <p className="mt-1 text-sm text-slate-500">Acompanhe os ultimos lotes gerados no sistema.</p>
+      {/* ── Batch Form ── */}
+      {templates.length ? (
+        <div style={{ marginBottom: "2.5rem" }}>
+          <BatchForm templates={templates} />
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[860px] text-left text-sm">
-            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+      ) : (
+        <div
+          style={{
+            padding: "2rem",
+            textAlign: "center",
+            background: "var(--surface-1)",
+            border: "1px dashed var(--border-muted)",
+            borderRadius: "var(--radius-lg)",
+            color: "var(--text-muted)",
+            marginBottom: "2rem",
+          }}
+        >
+          Crie um modelo antes de importar planilhas.
+        </div>
+      )}
+
+      {/* ── Batch History Table ── */}
+      <section className="dark-card-flat">
+        <div className="dark-card-header">
+          <div>
+            <h2>Histórico de lotes</h2>
+            <p style={{ fontSize: "0.8125rem", color: "var(--text-muted)", marginTop: 2 }}>
+              Acompanhe os últimos lotes gerados no sistema.
+            </p>
+          </div>
+        </div>
+
+        <div className="table-scroll">
+          <table className="dark-table" style={{ minWidth: 860 }}>
+            <thead>
               <tr>
-                <th className="px-4 py-3">Inicio</th>
-                <th className="px-4 py-3">Modelo</th>
-                <th className="px-4 py-3">Empresa</th>
-                <th className="px-4 py-3">Data</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Progresso</th>
-                <th className="px-4 py-3">Erros</th>
-                <th className="px-4 py-3">Operador</th>
+                <th>Início</th>
+                <th>Modelo</th>
+                <th>Empresa</th>
+                <th>Data cert.</th>
+                <th>Status</th>
+                <th>Progresso</th>
+                <th>Erros</th>
+                <th>Operador</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {batches.map((batch) => {
                 const errors = Array.isArray(batch.errors) ? batch.errors : [];
+                const statusInfo = BATCH_STATUS[batch.status] ?? { label: batch.status, cls: "chip" };
                 return (
                   <tr key={batch.id}>
-                    <td className="px-4 py-3">{formatDateTime(batch.startedAt)}</td>
-                    <td className="px-4 py-3 font-medium">{batch.template.name}</td>
-                    <td className="px-4 py-3">{batch.company}</td>
-                    <td className="px-4 py-3">{batch.issuedDate}</td>
-                    <td className="px-4 py-3">
-                      <span className="rounded bg-slate-100 px-2 py-1 text-xs font-bold">{batch.status}</span>
+                    <td>{formatDateTime(batch.startedAt)}</td>
+                    <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>{batch.template.name}</td>
+                    <td>{batch.company}</td>
+                    <td>{batch.issuedDate}</td>
+                    <td>
+                      <span className={statusInfo.cls}>{statusInfo.label}</span>
                     </td>
-                    <td className="px-4 py-3">
-                      {batch.processed}/{batch.total} processados, {batch.created} gerados
+                    <td>
+                      <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                        {batch.processed}/{batch.total}
+                      </span>
+                      {" "}
+                      <span style={{ color: "var(--text-muted)", fontSize: "0.8rem" }}>({batch.created} gerados)</span>
                     </td>
-                    <td className="px-4 py-3">{errors.length}</td>
-                    <td className="px-4 py-3">{batch.createdBy.name}</td>
+                    <td>
+                      {errors.length > 0 ? (
+                        <span className="chip chip-danger">{errors.length}</span>
+                      ) : (
+                        <span style={{ color: "var(--text-muted)" }}>—</span>
+                      )}
+                    </td>
+                    <td>{batch.createdBy.name}</td>
                   </tr>
                 );
               })}
-              {!batches.length ? (
+              {!batches.length && (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan={8}>
+                  <td colSpan={8} style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
                     Nenhum lote gerado ainda.
                   </td>
                 </tr>
-              ) : null}
+              )}
             </tbody>
           </table>
         </div>
       </section>
     </div>
   );
-}
-
-function formatDateTime(value: Date) {
-  return new Intl.DateTimeFormat("pt-BR", {
-    dateStyle: "short",
-    timeStyle: "short",
-  }).format(value);
 }

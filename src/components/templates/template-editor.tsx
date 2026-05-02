@@ -17,6 +17,7 @@ import {
   type TemplateLayout,
   type TemplateVariableDefinition,
 } from "@/lib/certificate-layout";
+import { useConfirmDialog } from "@/components/confirmation-dialog";
 import { dataUrlToHtmlDocument, extractDocumentPreview } from "@/lib/document-extract.client";
 import { templateImportDraftStorageKey, type TemplateImportDraft } from "@/lib/template-import-draft";
 
@@ -48,6 +49,7 @@ const LEAVE_WARNING =
 
 export function TemplateEditor({ initial }: TemplateEditorProps) {
   const router = useRouter();
+  const { confirm, confirmationDialog } = useConfirmDialog();
   const initialLayout = useMemo(() => initial?.layout ?? defaultLayout(), [initial?.layout]);
   const [name, setName] = useState(initial?.name ?? "Novo certificado");
   const [description, setDescription] = useState(initial?.description ?? "");
@@ -214,15 +216,24 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       const nextUrl = new URL(anchor.href);
       if (nextUrl.origin !== window.location.origin || nextUrl.href === window.location.href) return;
 
-      if (!window.confirm(LEAVE_WARNING)) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
+      event.preventDefault();
+      event.stopPropagation();
+
+      void confirm({
+        title: "Sair sem salvar",
+        message: LEAVE_WARNING,
+        confirmLabel: "Sair",
+        tone: "danger",
+      }).then((confirmed) => {
+        if (!confirmed) return;
+        skipLeaveWarningRef.current = true;
+        router.push(`${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+      });
     }
 
     document.addEventListener("click", handleDocumentClick, true);
     return () => document.removeEventListener("click", handleDocumentClick, true);
-  }, [hasUnsavedChanges]);
+  }, [confirm, hasUnsavedChanges, router]);
 
   function updateElement(patch: Partial<TemplateElement>) {
     if (!selected) return;
@@ -451,8 +462,17 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     }
   }
 
-  function discardAndExit() {
-    if (hasUnsavedChanges && !window.confirm("Descartar este modelo sem salvar?")) return;
+  async function discardAndExit() {
+    if (hasUnsavedChanges) {
+      const confirmed = await confirm({
+        title: "Descartar modelo",
+        message: "Descartar este modelo sem salvar?",
+        confirmLabel: "Descartar",
+        tone: "danger",
+      });
+      if (!confirmed) return;
+    }
+
     skipLeaveWarningRef.current = true;
     window.sessionStorage.removeItem(templateImportDraftStorageKey);
     router.push("/modelos");
@@ -479,6 +499,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
 
   return (
     <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,320px)]">
+      {confirmationDialog}
       <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 sm:p-4">
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <button type="button" onClick={() => addElement("text")} className="icon-button" title="Adicionar texto">

@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { extractVariableKeys, type TemplatePageBorder } from "@/lib/certificate-layout";
 import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
-import { convertDocxToPdfWithCloudConvert } from "@/lib/cloudconvert";
+import { convertDocxToPdfWithGotenberg } from "@/lib/gotenberg";
 
 export type DocxPreviewPage = {
   width: number;
@@ -32,15 +32,15 @@ export async function buildDocxPreview(buffer: Buffer): Promise<DocxPreviewResul
     extractRawText(buffer),
     extractDocxPage(buffer),
   ]);
-  const libreOfficePdf = await convertDocxToPdfBuffer(buffer);
-  const cloudConvertPdf = libreOfficePdf ? null : await convertDocxToPdfWithCloudConvert(buffer);
-  const nativePdf = libreOfficePdf ?? cloudConvertPdf;
-  const fallbackImageDataUrl = nativePdf ? "" : await renderDocxPageImage(buffer, page);
+  const gotenbergPdf = await convertDocxToPdfWithGotenberg(buffer);
+  const libreOfficePdf = gotenbergPdf ? null : await convertDocxToPdfBuffer(buffer);
+  const nativePdf = gotenbergPdf ?? libreOfficePdf;
+  const fallbackImageDataUrl = nativePdf ? "" : await renderDocxPageImageSafely(buffer, page);
   const renderDataUrl = nativePdf
     ? `data:application/pdf;base64,${nativePdf.toString("base64")}`
     : fallbackImageDataUrl;
-  const renderFileType = nativePdf ? "application/pdf" : "image/png";
-  const renderEngine = libreOfficePdf ? "libreoffice" : cloudConvertPdf ? "cloudconvert" : "docx-preview-api";
+  const renderFileType = nativePdf ? "application/pdf" : fallbackImageDataUrl ? "image/png" : "";
+  const renderEngine = gotenbergPdf ? "gotenberg" : libreOfficePdf ? "libreoffice" : fallbackImageDataUrl ? "docx-preview-api" : "";
 
   return {
     previewHtml: rawTextToPreviewHtml(rawText),
@@ -52,6 +52,15 @@ export async function buildDocxPreview(buffer: Buffer): Promise<DocxPreviewResul
     page,
     variables: extractVariableKeys(rawText),
   };
+}
+
+async function renderDocxPageImageSafely(buffer: Buffer, page: DocxPreviewPage) {
+  try {
+    return await renderDocxPageImage(buffer, page);
+  } catch (error) {
+    console.warn("Preview visual DOCX indisponivel; usando preview no navegador.", error);
+    return "";
+  }
 }
 
 async function extractRawText(buffer: Buffer) {

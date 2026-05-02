@@ -25,12 +25,14 @@ type BatchTemplate = {
 type PreviewRow = {
   line: number;
   name: string;
+  document: string;
+  documentDigits: string;
   errors: string[];
 };
 
 const recipientKeys = new Set(["nome", "name", "participante", "aluno", "titular"]);
 const companyKeys = new Set(["empresa", "company"]);
-const steps = ["Dados", "Nomes", "Revisao"];
+const steps = ["Dados", "Pessoas", "Revisao"];
 
 export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   const [step, setStep] = useState(0);
@@ -48,18 +50,20 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   );
   const recipientKey =
     selectedTemplate?.variables.find((variable) => recipientKeys.has(normalizeFieldKey(variable.key)))?.key ?? "nome";
+  const documentVariable = selectedTemplate?.variables.find((variable) => getDocumentMode(variable)) ?? null;
   const sharedVariables =
     selectedTemplate?.variables.filter(
       (variable) =>
         !recipientKeys.has(normalizeFieldKey(variable.key)) &&
         !companyKeys.has(normalizeFieldKey(variable.key)) &&
+        !getDocumentMode(variable) &&
         !isDateField(variable),
     ) ?? [];
 
-  const names = useMemo(() => splitNames(namesText), [namesText]);
+  const people = useMemo(() => splitPeople(namesText, Boolean(documentVariable)), [namesText, documentVariable]);
   const preview = useMemo(
-    () => buildPreviewRows({ names, company, issuedDate }),
-    [names, company, issuedDate],
+    () => buildPreviewRows({ people, company, issuedDate, documentVariable }),
+    [people, company, issuedDate, documentVariable],
   );
   const sharedMissing = sharedVariables.filter(
     (variable) => variable.required && !sharedValues[variable.key]?.trim(),
@@ -67,7 +71,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   const validRows = preview.filter((row) => !row.errors.length);
   const hasErrors = preview.some((row) => row.errors.length) || !company.trim() || !issuedDate.trim() || sharedMissing.length > 0;
   const canContinueFromData = Boolean(templateId && company.trim() && issuedDate.trim() && !sharedMissing.length);
-  const canContinueFromNames = names.length > 0;
+  const canContinueFromNames = people.length > 0;
   const canSubmit = !hasErrors && validRows.length > 0;
 
   async function submit() {
@@ -79,7 +83,12 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     form.set("empresa", company.trim());
     form.set("data", formattedIssuedDate);
     form.set("recipientKey", recipientKey);
-    form.set("names", names.join("\n"));
+    form.set("names", preview.map((row) => row.name).join("\n"));
+
+    if (documentVariable) {
+      form.set("documentKey", documentVariable.key);
+      form.set("documents", preview.map((row) => row.document).join("\n"));
+    }
 
     for (const variable of selectedTemplate?.variables ?? []) {
       if (companyKeys.has(normalizeFieldKey(variable.key))) {
@@ -107,255 +116,316 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     }
 
     notifyBatchJobStarted(result.jobId);
-    setMessage(`Lote iniciado com ${result.total ?? validRows.length} certificados. Voce pode sair desta tela.`);
+    setMessage(`Lote iniciado com ${result.total ?? validRows.length} certificados. Você pode sair desta tela.`);
     setStep(0);
     setNamesText("");
   }
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5">
-      <div className="grid gap-2 sm:grid-cols-3">
+    <section className="dark-card-flat" style={{ padding: "1.25rem" }}>
+      {/* Step tabs */}
+      <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(3, 1fr)" }}>
         {steps.map((label, index) => (
           <button
             key={label}
             type="button"
             onClick={() => setStep(index)}
-            className={`flex items-center gap-2 rounded-md border px-3 py-2 text-left text-sm font-semibold ${
-              step === index
-                ? "border-teal-700 bg-teal-50 text-teal-900"
-                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
-            }`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              borderRadius: "var(--radius-md)",
+              border: `1px solid ${step === index ? "var(--brand-500)" : "var(--border-muted)"}`,
+              background: step === index ? "var(--brand-50)" : "var(--surface-2)",
+              padding: "0.5rem 0.75rem",
+              textAlign: "left",
+              fontSize: "0.875rem",
+              fontWeight: 600,
+              color: step === index ? "var(--brand-700)" : "var(--text-secondary)",
+              cursor: "pointer",
+              transition: "all 150ms",
+              fontFamily: "inherit",
+            }}
           >
-            <span className="grid size-6 place-items-center rounded-full bg-white text-xs">{index + 1}</span>
+            <span
+              style={{
+                display: "grid",
+                width: 22,
+                height: 22,
+                placeItems: "center",
+                borderRadius: "50%",
+                background: step === index ? "var(--brand-600)" : "var(--surface-3)",
+                color: step === index ? "#fff" : "var(--text-muted)",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+                flexShrink: 0,
+              }}
+            >
+              {index + 1}
+            </span>
             {label}
           </button>
         ))}
       </div>
 
-      <div className="mt-6">
-        {step === 0 ? (
+      <div style={{ marginTop: "1.5rem" }}>
+        {step === 0 && (
           <div>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
               <label className="field">
-                <span>Modelo</span>
-                <select value={templateId} required onChange={(event) => setTemplateId(event.target.value)}>
-                  {templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.name}
-                    </option>
+                <span className="field-label">Modelo</span>
+                <select value={templateId} required onChange={(e) => setTemplateId(e.target.value)}>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
                   ))}
                 </select>
               </label>
               <label className="field">
-                <span>Empresa</span>
-                <input value={company} required onChange={(event) => setCompany(event.target.value)} />
+                <span className="field-label">Empresa</span>
+                <input value={company} required onChange={(e) => setCompany(e.target.value)} />
               </label>
               <label className="field">
-                <span>Data</span>
-                <input
-                  type="date"
-                  value={issuedDate}
-                  required
-                  onChange={(event) => setIssuedDate(event.target.value)}
-                />
+                <span className="field-label">Data</span>
+                <input type="date" value={issuedDate} required onChange={(e) => setIssuedDate(e.target.value)} />
               </label>
               {sharedVariables.map((variable) => (
                 <label key={variable.id} className="field">
-                  <span>{variable.label}</span>
+                  <span className="field-label">{variable.label}</span>
                   <input
                     value={sharedValues[variable.key] ?? ""}
                     required={variable.required}
-                    inputMode={isNumberOnlyVariable(variable) ? "numeric" : undefined}
-                    pattern={isNumberOnlyVariable(variable) ? "[0-9]*" : undefined}
                     placeholder={`{{${variable.key}}}`}
-                    onChange={(event) =>
-                      setSharedValues((current) => ({
-                        ...current,
-                        [variable.key]: isNumberOnlyVariable(variable)
-                          ? event.target.value.replace(/\D/g, "")
-                          : event.target.value,
-                      }))
-                    }
+                    onChange={(e) => setSharedValues((cur) => ({ ...cur, [variable.key]: e.target.value }))}
                   />
                 </label>
               ))}
             </div>
-            {sharedMissing.length ? (
-              <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
-                Preencha: {sharedMissing.map((variable) => variable.label).join(", ")}.
+            {sharedMissing.length > 0 && (
+              <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "#d97706" }}>
+                Preencha: {sharedMissing.map((v) => v.label).join(", ")}.
               </p>
-            ) : null}
+            )}
           </div>
-        ) : null}
+        )}
 
-        {step === 1 ? (
+        {step === 1 && (
           <label className="field">
-            <span>Nomes</span>
+            <span className="field-label">
+              {documentVariable ? `Pessoas (${getPersonInputLabel(documentVariable)})` : "Nomes"}
+            </span>
             <textarea
               value={namesText}
-              onChange={(event) => setNamesText(event.target.value)}
+              onChange={(e) => setNamesText(e.target.value)}
               rows={10}
-              placeholder={"Cole um nome por linha\nMaria Silva\nJoao Santos\nAna Costa"}
+              placeholder={documentVariable ? "Nome; CPF\nMaria Silva; 123.456.789-00" : "Cole um nome por linha\nMaria Silva\nJoao Santos"}
             />
-            <span className="text-xs font-medium text-slate-500">{names.length} nomes informados</span>
+            <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{people.length} pessoas informadas</span>
           </label>
-        ) : null}
+        )}
 
-        {step === 2 ? (
+        {step === 2 && (
           <div>
-            <div className="grid gap-3 sm:grid-cols-4">
+            <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
               <SummaryItem label="Modelo" value={selectedTemplate?.name ?? "-"} />
               <SummaryItem label="Empresa" value={company || "-"} />
               <SummaryItem label="Data" value={issuedDate || "-"} />
-              <SummaryItem label="Validos" value={`${validRows.length}/${preview.length}`} />
+              <SummaryItem label="Válidos" value={`${validRows.length}/${preview.length}`} />
             </div>
-
-            <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[680px] text-left text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase text-slate-500">
-                    <tr>
-                      <th className="px-4 py-3">Linha</th>
-                      <th className="px-4 py-3">Nome</th>
-                      <th className="px-4 py-3">Empresa</th>
-                      <th className="px-4 py-3">Data</th>
-                      <th className="px-4 py-3">Status</th>
+            <div className="dark-card-flat table-scroll" style={{ marginTop: "1.25rem" }}>
+              <table className="dark-table" style={{ minWidth: 600 }}>
+                <thead>
+                  <tr>
+                    <th>Linha</th>
+                    <th>Nome</th>
+                    {documentVariable && <th>{getFieldLabel(documentVariable)}</th>}
+                    <th>Empresa</th>
+                    <th>Data</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.map((row) => (
+                    <tr key={`${row.line}-${row.name}`}>
+                      <td>{row.line}</td>
+                      <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{row.name || "-"}</td>
+                      {documentVariable && <td>{row.document || "-"}</td>}
+                      <td>{company || "-"}</td>
+                      <td>{formatDateLongPtBr(issuedDate) || "-"}</td>
+                      <td>
+                        {row.errors.length ? (
+                          <span className="chip chip-warning">{row.errors.join(", ")}</span>
+                        ) : (
+                          <span className="chip chip-success">
+                            <CheckCircle2 style={{ width: 12, height: 12, marginRight: 3 }} />
+                            Pronto
+                          </span>
+                        )}
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {preview.map((row) => (
-                      <tr key={`${row.line}-${row.name}`}>
-                        <td className="px-4 py-3">{row.line}</td>
-                        <td className="px-4 py-3 font-medium">{row.name || "-"}</td>
-                        <td className="px-4 py-3">{company || "-"}</td>
-                        <td className="px-4 py-3">{formatDateLongPtBr(issuedDate) || "-"}</td>
-                        <td className="px-4 py-3">
-                          {row.errors.length ? (
-                            <span className="font-semibold text-amber-700">{row.errors.join(", ")}</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 font-semibold text-teal-700">
-                              <CheckCircle2 className="size-4" />
-                              Pronto
-                            </span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                    {!preview.length ? (
-                      <tr>
-                        <td className="px-4 py-6 text-center text-slate-500" colSpan={5}>
-                          Informe os nomes para revisar o lote.
-                        </td>
-                      </tr>
-                    ) : null}
-                  </tbody>
-                </table>
-              </div>
+                  ))}
+                  {!preview.length && (
+                    <tr>
+                      <td colSpan={documentVariable ? 6 : 5} style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)" }}>
+                        Informe as pessoas para revisar o lote.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
-
-            {hasErrors ? (
-              <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
+            {hasErrors && (
+              <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "#d97706" }}>
                 Corrija os campos destacados antes de gerar os certificados.
               </p>
-            ) : null}
+            )}
           </div>
-        ) : null}
+        )}
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-        <button
-          type="button"
-          disabled={step === 0}
-          onClick={() => setStep((current) => Math.max(0, current - 1))}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          <ArrowLeft className="size-4" />
-          Voltar
+      <div style={{ marginTop: "1.5rem", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+        <button type="button" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))} className="btn btn-ghost" style={{ opacity: step === 0 ? 0.4 : 1 }}>
+          <ArrowLeft style={{ width: 15, height: 15 }} /> Voltar
         </button>
         {step < 2 ? (
-          <button
-            type="button"
-            disabled={step === 0 ? !canContinueFromData : !canContinueFromNames}
-            onClick={() => setStep((current) => Math.min(2, current + 1))}
-            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
-          >
-            Continuar
-            <ArrowRight className="size-4" />
+          <button type="button" disabled={step === 0 ? !canContinueFromData : !canContinueFromNames} onClick={() => setStep((s) => Math.min(2, s + 1))} className="btn btn-primary">
+            Continuar <ArrowRight style={{ width: 15, height: 15 }} />
           </button>
         ) : (
-          <button
-            type="button"
-            disabled={!canSubmit || loading}
-            onClick={submit}
-            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:opacity-60"
-          >
-            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <Upload className="size-4" />}
-            {loading ? "Iniciando" : "Gerar certificados"}
+          <button type="button" disabled={!canSubmit || loading} onClick={submit} className="btn btn-primary">
+            {loading
+              ? <><LoaderCircle style={{ width: 15, height: 15, animation: "spin 1s linear infinite" }} /> Iniciando</>
+              : <><Upload style={{ width: 15, height: 15 }} /> Gerar certificados</>
+            }
           </button>
         )}
       </div>
 
-      {message ? <p className="mt-4 rounded-md bg-slate-100 px-3 py-2 text-sm font-medium">{message}</p> : null}
+      {message && (
+        <p style={{ marginTop: "1rem", borderRadius: "var(--radius-md)", background: "var(--surface-2)", border: "1px solid var(--border-subtle)", padding: "0.625rem 0.875rem", fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+          {message}
+        </p>
+      )}
     </section>
   );
 }
 
 function SummaryItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-      <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
-      <p className="mt-1 truncate text-sm font-semibold text-slate-950">{value}</p>
+    <div style={{ borderRadius: "var(--radius-md)", border: "1px solid var(--border-subtle)", background: "var(--surface-2)", padding: "0.625rem 0.875rem" }}>
+      <p style={{ fontSize: "0.72rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "var(--text-muted)" }}>{label}</p>
+      <p style={{ marginTop: "0.25rem", fontSize: "0.875rem", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{value}</p>
     </div>
   );
 }
 
-function splitNames(value: string) {
-  return value
-    .split(/\r?\n|;/)
-    .map((name) => name.trim())
-    .filter(Boolean);
+function splitPeople(value: string, hasDocumentField: boolean) {
+  if (!hasDocumentField) {
+    return value.split(/\r?\n|;/).map((name) => ({ name: name.trim(), document: "" })).filter((p) => p.name);
+  }
+  return value.split(/\r?\n/).map((line) => parsePersonLine(line)).filter((p) => p.name || p.document);
 }
 
-function buildPreviewRows({
-  names,
-  company,
-  issuedDate,
-}: {
-  names: string[];
-  company: string;
-  issuedDate: string;
-}) {
+function parsePersonLine(line: string) {
+  const value = line.trim();
+  if (!value) return { name: "", document: "" };
+  const separator = value.includes(";") ? ";" : value.includes("\t") ? "\t" : ",";
+  const [name, ...documentParts] = value.split(separator);
+  return { name: name.trim(), document: normalizeDocumentForDisplay(documentParts.join(separator).trim()) };
+}
+
+function buildPreviewRows({ people, company, issuedDate, documentVariable }: { people: Array<{ name: string; document: string }>; company: string; issuedDate: string; documentVariable: BatchTemplate["variables"][number] | null; }) {
   const seen = new Map<string, number>();
-
-  return names.map<PreviewRow>((name, index) => {
+  const seenDocuments = new Map<string, number>();
+  return people.map<PreviewRow>((person, index) => {
     const errors: string[] = [];
+    const name = person.name.trim();
+    const document = person.document.trim();
+    const documentDigits = onlyDigits(document);
     const normalizedName = normalizeValue(name);
-
+    const documentState = documentVariable ? getDocumentState(documentVariable, document) : null;
     if (!name.trim()) errors.push("nome vazio");
     if (!company.trim()) errors.push("empresa vazia");
     if (!issuedDate.trim()) errors.push("data vazia");
-
-    const firstLine = seen.get(normalizedName);
-    if (firstLine) {
-      errors.push(`duplicado da linha ${firstLine}`);
-    } else {
-      seen.set(normalizedName, index + 1);
+    if (documentVariable?.required && !documentDigits) errors.push(`${getFieldLabel(documentVariable)} vazio`);
+    if (documentState && documentState.digits.length > 0 && !documentState.complete) errors.push(`${documentState.label} deve ter ${documentState.expectedLength} digitos`);
+    if (normalizedName) {
+      const firstLine = seen.get(normalizedName);
+      if (firstLine) { errors.push(`nome duplicado da linha ${firstLine}`); } else { seen.set(normalizedName, index + 1); }
     }
-
-    return { line: index + 1, name, errors };
+    if (documentDigits && documentVariable) {
+      const firstDocumentLine = seenDocuments.get(documentDigits);
+      if (firstDocumentLine) { errors.push(`${getFieldLabel(documentVariable)} duplicado da linha ${firstDocumentLine}`); } else { seenDocuments.set(documentDigits, index + 1); }
+    }
+    return { line: index + 1, name, document, documentDigits, errors };
   });
 }
 
 function normalizeValue(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function isNumberOnlyVariable(variable: { key: string; label: string }) {
-  void variable;
-  return false;
+type DocumentMode = "CPF" | "CNPJ" | "CPF_CNPJ";
+
+function getFieldLabel(variable: { key: string; label: string }) {
+  const normalizedLabel = normalizeFieldKey(variable.label);
+  if (normalizedLabel === "cpf") return "CPF";
+  if (normalizedLabel === "cnpj") return "CNPJ";
+  return variable.label;
+}
+
+function getPersonInputLabel(variable: { key: string; label: string }) {
+  return `Nome; ${getFieldLabel(variable)}`;
+}
+
+function getDocumentMode(variable: { key: string; label: string }): DocumentMode | null {
+  const key = normalizeFieldKey(variable.key);
+  const label = normalizeFieldKey(variable.label);
+  const combined = `${key}_${label}`;
+  const hasCpf = combined.includes("cpf");
+  const hasCnpj = combined.includes("cnpj");
+  const hasDocument = combined.includes("documento") || combined.includes("document");
+  if (hasCpf && hasCnpj) return "CPF_CNPJ";
+  if (hasCpf) return "CPF";
+  if (hasCnpj) return "CNPJ";
+  if (hasDocument) return "CPF_CNPJ";
+  return null;
+}
+
+function getDocumentState(variable: { key: string; label: string }, value: string) {
+  const mode = getDocumentMode(variable);
+  if (!mode) return null;
+  const digits = onlyDigits(value);
+  const inferredType = inferDocumentType(mode, digits);
+  const expectedLength = inferredType === "CNPJ" ? 14 : 11;
+  return { digits, label: inferredType, expectedLength, complete: digits.length === expectedLength };
+}
+
+function inferDocumentType(mode: DocumentMode, digits: string) {
+  if (mode === "CPF") return "CPF";
+  if (mode === "CNPJ") return "CNPJ";
+  return digits.length > 11 ? "CNPJ" : "CPF";
+}
+
+function normalizeDocumentForDisplay(value: string) {
+  const digits = onlyDigits(value);
+  if (digits.length === 11) return formatCpf(digits);
+  if (digits.length === 14) return formatCnpj(digits);
+  return value.trim();
+}
+
+function onlyDigits(value: string) { return value.replace(/\D/g, ""); }
+
+function formatCpf(value: string) {
+  const d = value.slice(0, 11);
+  return [d.slice(0,3), d.slice(3,6), d.slice(6,9)].filter(Boolean).join(".") + (d.slice(9,11) ? `-${d.slice(9,11)}` : "");
+}
+
+function formatCnpj(value: string) {
+  const d = value.slice(0, 14);
+  let f = d.slice(0,2);
+  if (d.slice(2,5)) f += `.${d.slice(2,5)}`;
+  if (d.slice(5,8)) f += `.${d.slice(5,8)}`;
+  if (d.slice(8,12)) f += `/${d.slice(8,12)}`;
+  if (d.slice(12,14)) f += `-${d.slice(12,14)}`;
+  return f;
 }

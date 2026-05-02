@@ -112,6 +112,10 @@ export function labelFromKey(key: string) {
     return "Data por Extenso";
   }
 
+  if (normalizedKey === "nome" || normalizedKey === "name" || normalizedKey === "aluno") {
+    return "Aluno";
+  }
+
   return key
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());

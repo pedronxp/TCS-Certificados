@@ -15,6 +15,7 @@ type HistorySearchParams = Promise<{
   q?: string | string[];
   company?: string | string[];
   status?: string | string[];
+  visibility?: string | string[];
   from?: string | string[];
   to?: string | string[];
   page?: string | string[];
@@ -32,8 +33,8 @@ export default async function CertificateHistoryPage({
 
   const params = await searchParams;
   const filters = parseFilters(params);
-  const where = buildWhere(filters);
   const canManage = user.role === "ADMIN";
+  const where = buildWhere(filters, { canManage, userId: user.id });
 
   const rows = await prisma.certificateIssue.findMany({
     where,
@@ -47,6 +48,7 @@ export default async function CertificateHistoryPage({
       revokedAt: true,
       values: true,
       deleteAt: true,
+      hiddenAt: true,
       recipient: {
         select: {
           name: true,
@@ -67,6 +69,7 @@ export default async function CertificateHistoryPage({
     },
     orderBy: [{ issuedAt: "desc" }, { id: "desc" }],
   });
+
   const hasNextPage = rows.length > pageSize;
   const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => ({
     id: issue.id,
@@ -75,6 +78,7 @@ export default async function CertificateHistoryPage({
     issuedAt: issue.issuedAt.toISOString(),
     revokedAt: issue.revokedAt?.toISOString() ?? null,
     deleteAt: toDateInputValue(issue.deleteAt),
+    hiddenAt: issue.hiddenAt?.toISOString() ?? null,
     recipientName: issue.recipient.name,
     recipientEmail: issue.recipient.email,
     recipientDocument: issue.recipient.document,
@@ -86,25 +90,37 @@ export default async function CertificateHistoryPage({
   const end = start + issues.length - 1;
 
   return (
-    <div>
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="page-shell page-shell-wide">
+      <div className="page-header">
         <div>
-          <h1 className="text-2xl font-bold">Histórico</h1>
-          <p className="mt-1 text-sm text-slate-500">
+          <h1 className="page-title">Histórico</h1>
+          <p className="page-subtitle">
             Consulte certificados emitidos, filtre registros e baixe os arquivos gerados.
           </p>
         </div>
-        <div className="rounded-md border border-slate-200 bg-white px-4 py-3 text-sm">
-          <p className="font-bold text-slate-950">{issues.length}</p>
-          <p className="text-slate-500">{issues.length === 1 ? "registro nesta página" : "registros nesta página"}</p>
+        <div
+          style={{
+            background: "var(--surface-1)",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: "var(--radius-md)",
+            padding: "0.75rem 1.25rem",
+            textAlign: "center",
+          }}
+        >
+          <p style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1 }}>
+            {issues.length}
+          </p>
+          <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 2 }}>
+            {issues.length === 1 ? "registro nesta página" : "registros nesta página"}
+          </p>
         </div>
       </div>
 
-      <form className="mt-6 grid gap-3 rounded-lg border border-slate-200 bg-white p-4 lg:grid-cols-12">
-        <label className="field lg:col-span-5">
-          <span>Buscar</span>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+      <form className="filter-bar mt-6" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
+        <label className="field" style={{ gridColumn: "span 5" }}>
+          <span className="field-label">Buscar</span>
+          <div style={{ position: "relative" }}>
+            <Search style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", width: 16, height: 16, pointerEvents: "none", color: "var(--text-muted)" }} />
             <input
               name="q"
               defaultValue={filters.q}
@@ -114,8 +130,8 @@ export default async function CertificateHistoryPage({
           </div>
         </label>
 
-        <label className="field lg:col-span-4">
-          <span>Empresa</span>
+        <label className="field" style={{ gridColumn: "span 4" }}>
+          <span className="field-label">Empresa</span>
           <input
             name="company"
             defaultValue={filters.company}
@@ -123,8 +139,8 @@ export default async function CertificateHistoryPage({
           />
         </label>
 
-        <label className="field lg:col-span-3">
-          <span>Status</span>
+        <label className="field" style={{ gridColumn: "span 3" }}>
+          <span className="field-label">Status</span>
           <select name="status" defaultValue={filters.status ?? ""}>
             <option value="">Todos</option>
             <option value="ISSUED">Emitido</option>
@@ -132,46 +148,71 @@ export default async function CertificateHistoryPage({
           </select>
         </label>
 
-        <label className="field lg:col-span-3">
-          <span>De</span>
-          <input name="from" type="date" defaultValue={filters.from} />
-        </label>
+        <details
+          className="filter-advanced"
+          open={canManage ? filters.visibility !== "visible" || Boolean(filters.from || filters.to) : Boolean(filters.from || filters.to)}
+          style={{ gridColumn: "span 9" }}
+        >
+          <summary>{canManage ? "Visibilidade e período" : "Período"}</summary>
+          <div className="filter-advanced-grid">
+            {canManage ? (
+              <label className="field">
+                <span className="field-label">Visibilidade</span>
+                <select name="visibility" defaultValue={filters.visibility}>
+                  <option value="visible">Visíveis</option>
+                  <option value="hidden">Ocultos</option>
+                  <option value="all">Todos</option>
+                </select>
+              </label>
+            ) : null}
 
-        <label className="field lg:col-span-3">
-          <span>Até</span>
-          <input name="to" type="date" defaultValue={filters.to} />
-        </label>
+            <label className="field">
+              <span className="field-label">De</span>
+              <input name="from" type="date" defaultValue={filters.from} />
+            </label>
 
-        <div className="flex items-end gap-2 lg:col-span-3">
-          <button className="inline-flex h-10 items-center justify-center gap-2 whitespace-nowrap rounded-md bg-teal-700 px-4 text-sm font-semibold text-white hover:bg-teal-800">
-            <Search className="size-4" />
+            <label className="field">
+              <span className="field-label">Até</span>
+              <input name="to" type="date" defaultValue={filters.to} />
+            </label>
+          </div>
+        </details>
+
+        <div style={{ display: "flex", alignItems: "flex-end", gap: "0.5rem", gridColumn: "span 3" }}>
+          <button className="btn btn-primary" style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", height: 40 }}>
+            <Search style={{ width: 16, height: 16 }} />
             Filtrar
           </button>
           <Link
             href="/certificados/historico"
-            className="inline-grid h-10 w-10 shrink-0 place-items-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-950"
+            className="pagination-btn"
             title="Limpar filtros"
           >
-            <X className="size-4" />
+            <X style={{ width: 16, height: 16 }} />
           </Link>
         </div>
       </form>
 
       <HistoryTable issues={issues} canManage={canManage} />
 
-      <section className="overflow-hidden rounded-b-lg border-x border-b border-slate-200 bg-white">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-sm text-slate-600">
-          <p>
-            Mostrando {start}-{end}
-          </p>
-          <div className="flex items-center gap-2">
+      <section
+        style={{
+          background: "var(--surface-1)",
+          border: "1px solid var(--border-subtle)",
+          borderTop: "none",
+          borderRadius: "0 0 var(--radius-lg) var(--radius-lg)",
+        }}
+      >
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", padding: "0.875rem 1.5rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
+          <p>Mostrando {start}-{end}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
             <PaginationLink
               href={historyHref(filters, filters.page - 1)}
               disabled={filters.page <= 1}
               label="Página anterior"
               icon="previous"
             />
-            <span className="min-w-24 text-center font-medium text-slate-700">
+            <span style={{ minWidth: "6rem", textAlign: "center", fontWeight: 600, color: "var(--text-secondary)", fontSize: "0.875rem" }}>
               Página {filters.page}
             </span>
             <PaginationLink
@@ -189,20 +230,29 @@ export default async function CertificateHistoryPage({
 
 function parseFilters(params: Awaited<HistorySearchParams>) {
   const status = firstParam(params.status);
+  const visibility = parseVisibility(firstParam(params.visibility));
   const page = Number.parseInt(firstParam(params.page) || "1", 10);
 
   return {
     q: firstParam(params.q).trim(),
     company: firstParam(params.company).trim(),
     status: certificateStatuses.includes(status as CertificateStatus) ? (status as CertificateStatus) : undefined,
+    visibility,
     from: normalizeDateInput(firstParam(params.from)),
     to: normalizeDateInput(firstParam(params.to)),
     page: Number.isFinite(page) && page > 0 ? page : 1,
   };
 }
 
-function buildWhere(filters: ReturnType<typeof parseFilters>): Prisma.CertificateIssueWhereInput {
+function buildWhere(
+  filters: ReturnType<typeof parseFilters>,
+  scope: { canManage: boolean; userId: string },
+): Prisma.CertificateIssueWhereInput {
   const and: Prisma.CertificateIssueWhereInput[] = [];
+
+  if (!scope.canManage) {
+    and.push({ issuedById: scope.userId, hiddenAt: null });
+  }
 
   if (filters.q) {
     and.push({
@@ -259,6 +309,14 @@ function buildWhere(filters: ReturnType<typeof parseFilters>): Prisma.Certificat
     });
   }
 
+  if (filters.visibility === "visible") {
+    and.push({ hiddenAt: null });
+  }
+
+  if (filters.visibility === "hidden") {
+    and.push({ hiddenAt: { not: null } });
+  }
+
   if (filters.from || filters.to) {
     and.push({
       issuedAt: {
@@ -275,10 +333,12 @@ function getCompanyName(values: unknown) {
   if (!values || typeof values !== "object" || Array.isArray(values)) return "Sem empresa";
 
   const issueValues = values as Record<string, unknown>;
-  const company = issueValues.empresa ?? issueValues.company;
-  const companyName = String(company ?? "").trim();
+  for (const key of ["empresa", "company"]) {
+    const companyName = String(issueValues[key] ?? "").trim();
+    if (companyName) return companyName;
+  }
 
-  return companyName || "Sem empresa";
+  return "Sem empresa";
 }
 
 function firstParam(value: string | string[] | undefined) {
@@ -288,6 +348,10 @@ function firstParam(value: string | string[] | undefined) {
 
 function normalizeDateInput(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+function parseVisibility(value: string) {
+  return value === "hidden" || value === "all" ? value : "visible";
 }
 
 function toDateInputValue(value: Date | null) {
@@ -300,6 +364,7 @@ function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
   if (filters.q) params.set("q", filters.q);
   if (filters.company) params.set("company", filters.company);
   if (filters.status) params.set("status", filters.status);
+  if (filters.visibility !== "visible") params.set("visibility", filters.visibility);
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
   if (page > 1) params.set("page", String(page));
@@ -319,20 +384,21 @@ function PaginationLink({
   label: string;
   icon: "previous" | "next";
 }) {
-  const className =
-    "inline-grid h-9 w-9 place-items-center rounded-md border border-slate-300 bg-white text-slate-700 hover:bg-slate-50";
+  const iconElement = icon === "previous"
+    ? <ChevronLeft style={{ width: 16, height: 16 }} />
+    : <ChevronRight style={{ width: 16, height: 16 }} />;
 
   if (disabled) {
     return (
-      <span className={`${className} cursor-not-allowed opacity-50`} title={label}>
-        {icon === "previous" ? <ChevronLeft className="size-4" /> : <ChevronRight className="size-4" />}
+      <span className="pagination-btn disabled" title={label}>
+        {iconElement}
       </span>
     );
   }
 
   return (
-    <Link href={href} className={className} title={label}>
-      {icon === "previous" ? <ChevronLeft className="size-4" /> : <ChevronRight className="size-4" />}
+    <Link href={href} className="pagination-btn" title={label}>
+      {iconElement}
     </Link>
   );
 }

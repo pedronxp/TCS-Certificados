@@ -87,7 +87,7 @@ Copy-Item .env.example .env
 docker compose up -d
 ```
 
-O `docker-compose.yml` sobe um PostgreSQL 16 em `localhost:5432`, com banco `tcs_certificados`, usuário `postgres` e senha `postgres`.
+O `docker-compose.yml` sobe um PostgreSQL 16 em `localhost:5432`, com banco `tcs_certificados`, usuário `postgres` e senha `postgres`. Ele também sobe o Gotenberg em `localhost:3010`, usado para converter DOCX em PDF com LibreOffice open-source.
 
 ### 4. Aplique as migrations e gere o Prisma Client
 
@@ -211,6 +211,7 @@ Regras importantes:
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Opcional | Chave publishable Supabase. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Opcional | Chave server-side para gravar arquivos no Storage. |
 | `SUPABASE_CERTIFICATE_BUCKET` | Opcional | Bucket onde PDFs e DOCXs são armazenados. |
+| `GOTENBERG_URL` | Opcional | URL da API open-source de conversão DOCX para PDF. Padrão: `http://localhost:3010`. |
 
 ## Comandos Úteis
 

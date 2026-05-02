@@ -55,6 +55,11 @@ export async function findLibreOfficeExecutable() {
     return cachedExecutable;
   }
 
+  if (process.env.NODE_ENV === "production") {
+    cachedExecutable = null;
+    return cachedExecutable;
+  }
+
   for (const candidate of COMMON_WINDOWS_PATHS) {
     if (await fileExists(candidate)) {
       cachedExecutable = candidate;

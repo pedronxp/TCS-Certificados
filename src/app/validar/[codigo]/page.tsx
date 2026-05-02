@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { CheckCircle2, MessageCircle, ShieldCheck, XCircle } from "lucide-react";
 import { deleteExpiredCertificateIssues } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
 
@@ -18,42 +19,83 @@ export default async function ValidatePage({
     where: { verificationCode: codigo },
     include: { recipient: true, template: true },
   });
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const validationUrl = `${appUrl.replace(/\/$/, "")}/validar/${codigo}`;
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`Confira a validação do certificado: ${validationUrl}`)}`;
+  const valid = issue?.status === "ISSUED";
 
   return (
-    <main className="grid min-h-screen place-items-center bg-slate-100 px-4 py-10 text-slate-950">
-      <section className="w-full max-w-2xl rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <Link href="/" className="text-sm font-bold text-teal-700">TCS Certificados</Link>
-        {issue ? (
-          <div className="mt-6">
-            <span className={`rounded px-2 py-1 text-xs font-bold ${issue.status === "ISSUED" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>
-              {issue.status === "ISSUED" ? "Certificado válido" : "Certificado revogado"}
+    <main className="public-validation-page">
+      <section className="public-validation-card">
+        <div className="public-validation-brand">
+          <Link href="/" className="sidebar-logo-link">
+            <span className="sidebar-logo-mark">TC</span>
+            <span className="sidebar-logo-text">
+              <span className="sidebar-logo-title">TCS Certificados</span>
+              <span className="sidebar-logo-subtitle">Validação pública</span>
             </span>
-            <h1 className="mt-4 text-2xl font-bold">{issue.recipient.name}</h1>
-            <dl className="mt-5 grid gap-4 sm:grid-cols-2">
-              <div>
-                <dt className="text-sm text-slate-500">Modelo</dt>
-                <dd className="font-medium">{issue.template.name}</dd>
+          </Link>
+        </div>
+
+        {issue ? (
+          <div className="public-validation-grid">
+            <article className="public-validation-result">
+              <span className={`chip ${valid ? "chip-success" : "chip-danger"}`}>
+                {valid ? <CheckCircle2 className="size-4" /> : <XCircle className="size-4" />}
+                {valid ? "Certificado válido" : "Certificado revogado"}
+              </span>
+              <h1>{valid ? "Autenticidade confirmada" : "Validação com restrição"}</h1>
+              <p>
+                Este link público confirma a emissão e integridade do certificado com código
+                {" "}
+                <strong>{issue.verificationCode}</strong>.
+              </p>
+
+              <dl className="public-validation-list">
+                <div>
+                  <dt>Participante</dt>
+                  <dd>{issue.recipient.name}</dd>
+                </div>
+                <div>
+                  <dt>Modelo</dt>
+                  <dd>{issue.template.name}</dd>
+                </div>
+                <div>
+                  <dt>Emissão</dt>
+                  <dd>{issue.issuedAt.toLocaleDateString("pt-BR")}</dd>
+                </div>
+                <div>
+                  <dt>Status</dt>
+                  <dd>{valid ? "Válido" : "Revogado"}</dd>
+                </div>
+              </dl>
+
+              <div className="public-validation-actions">
+                <a className="btn btn-primary" href={whatsappUrl} target="_blank" rel="noreferrer">
+                  <MessageCircle className="size-4" />
+                  Compartilhar no WhatsApp
+                </a>
               </div>
-              <div>
-                <dt className="text-sm text-slate-500">Código</dt>
-                <dd className="font-mono font-medium">{issue.verificationCode}</dd>
+            </article>
+
+            <aside className="public-validation-side">
+              <div className="public-validation-seal">
+                <ShieldCheck className="size-12" />
               </div>
-              <div>
-                <dt className="text-sm text-slate-500">Emissão</dt>
-                <dd className="font-medium">{issue.issuedAt.toLocaleDateString("pt-BR")}</dd>
-              </div>
-              <div>
-                <dt className="text-sm text-slate-500">Status</dt>
-                <dd className="font-medium">{issue.status}</dd>
-              </div>
-            </dl>
+              <h2>Consulta oficial</h2>
+              <p>Use este endereço para conferir se o certificado apresentado corresponde a um registro emitido pela TCS Certificados.</p>
+              <code>{issue.verificationCode}</code>
+            </aside>
           </div>
         ) : (
-          <div className="mt-6">
-            <span className="rounded bg-red-50 px-2 py-1 text-xs font-bold text-red-700">Código não encontrado</span>
-            <h1 className="mt-4 text-2xl font-bold">Não foi possível validar este certificado</h1>
-            <p className="mt-2 text-slate-500">Confira o código informado ou solicite um novo link de validação.</p>
-          </div>
+          <article className="public-validation-result">
+            <span className="chip chip-danger">
+              <XCircle className="size-4" />
+              Código não encontrado
+            </span>
+            <h1>Não foi possível validar este certificado</h1>
+            <p>Confira o código informado ou solicite um novo link de validação.</p>
+          </article>
         )}
       </section>
     </main>

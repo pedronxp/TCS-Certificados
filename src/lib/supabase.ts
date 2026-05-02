@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 let adminClient: SupabaseClient | null = null;
+const bucketEnsurePromises = new Map<string, Promise<void>>();
 
 export function getSupabaseAdmin() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -37,6 +38,8 @@ export async function uploadCertificateFile({
   if (!supabase) return null;
 
   const bucket = getCertificateBucket();
+  await ensureCertificateBucket(supabase, bucket);
+
   const storagePath = `${verificationCode}/${filename}`;
   const { error } = await supabase.storage.from(bucket).upload(storagePath, buffer, {
     contentType: mimeType,
@@ -48,6 +51,46 @@ export async function uploadCertificateFile({
   }
 
   return storagePath;
+}
+
+async function ensureCertificateBucket(supabase: SupabaseClient, bucket: string) {
+  const existingPromise = bucketEnsurePromises.get(bucket);
+  if (existingPromise) return existingPromise;
+
+  const ensurePromise = (async () => {
+    const { error: getError } = await supabase.storage.getBucket(bucket);
+    if (!getError) return;
+
+    if (!isMissingBucketError(getError)) {
+      throw new Error(`Falha ao verificar bucket do Supabase Storage "${bucket}": ${getError.message}`);
+    }
+
+    const { error: createError } = await supabase.storage.createBucket(bucket, {
+      public: false,
+    });
+
+    if (createError && !isExistingBucketError(createError)) {
+      throw new Error(`Falha ao criar bucket do Supabase Storage "${bucket}": ${createError.message}`);
+    }
+  })();
+
+  bucketEnsurePromises.set(bucket, ensurePromise);
+
+  try {
+    await ensurePromise;
+  } catch (error) {
+    bucketEnsurePromises.delete(bucket);
+    throw error;
+  }
+}
+
+function isMissingBucketError(error: { message?: string; status?: number; statusCode?: number | string }) {
+  return error.status === 404 || error.statusCode === 404 || error.statusCode === "404" || error.message === "Bucket not found";
+}
+
+function isExistingBucketError(error: { message?: string; status?: number; statusCode?: number | string }) {
+  const message = error.message?.toLowerCase() ?? "";
+  return error.status === 409 || error.statusCode === 409 || error.statusCode === "409" || message.includes("already exists");
 }
 
 export async function downloadCertificateFile(storagePath: string) {

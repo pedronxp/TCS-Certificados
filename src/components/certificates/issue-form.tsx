@@ -14,6 +14,7 @@ type FormMessage = {
 export function IssueForm({
   templates,
   initialTemplateId,
+  currentUser,
 }: {
   templates: Array<{
     id: string;
@@ -21,6 +22,7 @@ export function IssueForm({
     variables: TemplateVariable[];
   }>;
   initialTemplateId?: string;
+  currentUser: { name: string; email: string; role: "ADMIN" | "OPERADOR" };
 }) {
   const router = useRouter();
   const [templateId, setTemplateId] = useState(
@@ -37,13 +39,21 @@ export function IssueForm({
     () => templates.find((template) => template.id === templateId),
     [templateId, templates],
   );
-  const variables = selectedTemplate?.variables ?? [];
+  const variables = useMemo(() => selectedTemplate?.variables ?? [], [selectedTemplate]);
+  const lockedValues = useMemo(
+    () => getLockedUserValues(variables, currentUser),
+    [currentUser, variables],
+  );
+  const effectiveValues = useMemo(
+    () => ({ ...values, ...lockedValues }),
+    [lockedValues, values],
+  );
   const requiredVariables = variables.filter((variable) => variable.required);
   const missingRequiredVariables = requiredVariables.filter(
-    (variable) => !values[variable.key]?.trim(),
+    (variable) => !effectiveValues[variable.key]?.trim(),
   );
   const invalidDocumentVariables = variables.filter((variable) => {
-    const state = getDocumentState(variable, values[variable.key] ?? "");
+    const state = getDocumentState(variable, effectiveValues[variable.key] ?? "");
     return Boolean(state && state.digits.length > 0 && !state.complete);
   });
   const canSubmit =
@@ -82,7 +92,7 @@ export function IssueForm({
     }
 
     const payloadValues = Object.fromEntries(
-      variables.map((variable) => [variable.key, values[variable.key]?.trim() ?? ""]),
+      variables.map((variable) => [variable.key, effectiveValues[variable.key]?.trim() ?? ""]),
     );
 
     setLoading(true);
@@ -150,8 +160,9 @@ export function IssueForm({
             key={variable.id}
             className={isWideField(variable) ? "md:col-span-2" : undefined}
             variable={variable}
-            value={values[variable.key] ?? ""}
+            value={effectiveValues[variable.key] ?? ""}
             dateValue={dateIsoValues[variable.key] ?? ""}
+            disabled={Object.hasOwn(lockedValues, variable.key)}
             onValueChange={(nextValue) =>
               setValues((current) => ({ ...current, [variable.key]: nextValue }))
             }
@@ -197,6 +208,7 @@ function CertificateField({
   variable,
   value,
   dateValue,
+  disabled,
   className,
   onValueChange,
   onDateValueChange,
@@ -204,6 +216,7 @@ function CertificateField({
   variable: TemplateVariable;
   value: string;
   dateValue: string;
+  disabled?: boolean;
   className?: string;
   onValueChange: (value: string) => void;
   onDateValueChange: (isoDate: string, formattedDate: string) => void;
@@ -222,6 +235,7 @@ function CertificateField({
           type="date"
           required={variable.required}
           value={dateValue}
+          disabled={disabled}
           onChange={(event) => {
             const iso = event.target.value;
             onDateValueChange(iso, formatDateLongPtBr(iso));
@@ -233,6 +247,7 @@ function CertificateField({
             <input
               required={variable.required}
               value={documentState.formatted}
+              disabled={disabled}
               inputMode="numeric"
               autoComplete="off"
               maxLength={documentState.maxLength}
@@ -261,6 +276,7 @@ function CertificateField({
         <input
           required={variable.required}
           value={value}
+          disabled={disabled}
           onChange={(event) => onValueChange(event.target.value)}
           placeholder={`{{${variable.key}}}`}
         />
@@ -295,7 +311,42 @@ function isWideField(variable: { key: string; label: string }) {
   const key = normalizeKey(variable.key);
   const label = normalizeKey(variable.label);
 
-  return key === "nome" || label === "nome" || key === "name" || label === "name";
+  return (
+    key === "nome" ||
+    label === "nome" ||
+    key === "name" ||
+    label === "name" ||
+    key === "aluno" ||
+    label === "aluno"
+  );
+}
+
+function getLockedUserValues(
+  variables: Array<{ key: string; label: string }>,
+  currentUser: { name: string; email: string; role: "ADMIN" | "OPERADOR" },
+) {
+  if (currentUser.role === "ADMIN") return {};
+
+  const locked: Record<string, string> = {};
+  for (const variable of variables) {
+    const field = normalizeKey(`${variable.key}_${variable.label}`);
+    if (
+      field.includes("nome") ||
+      field.includes("name") ||
+      field.includes("participante") ||
+      field.includes("aluno") ||
+      field.includes("titular")
+    ) {
+      locked[variable.key] = currentUser.name;
+      continue;
+    }
+
+    if (field.includes("email") || field.includes("e_mail")) {
+      locked[variable.key] = currentUser.email;
+    }
+  }
+
+  return locked;
 }
 
 function getDocumentMode(variable: { key: string; label: string }): DocumentMode | null {
