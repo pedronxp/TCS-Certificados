@@ -1,14 +1,17 @@
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import Docxtemplater from "docxtemplater";
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import PizZip from "pizzip";
 import QRCode from "qrcode";
 import { fillTemplateText, normalizeVariableKey, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import { convertDocxToPdfWithCloudConvert } from "@/lib/cloudconvert";
 import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
 import { convertDocxToPdfWithGotenberg } from "@/lib/gotenberg";
+import { convertDocxToPdfWithMicrosoftGraph } from "@/lib/microsoft-graph";
+import { buildVerificationTemplateValues } from "@/lib/verification-code";
 
 export const DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE =
-  "Conversor DOCX para PDF indisponivel. Configure GOTENBERG_URL com uma API Gotenberg externa ou LIBREOFFICE_PATH em um servidor com LibreOffice.";
+  "Conversor DOCX para PDF indisponivel. Configure MICROSOFT_GRAPH_*, CLOUDCONVERT_API_KEY, GOTENBERG_URL com uma API Gotenberg externa ou LIBREOFFICE_PATH em um servidor com LibreOffice.";
 
 export type RenderInput = {
   template: {
@@ -27,13 +30,14 @@ export async function renderCertificateHtml(input: RenderInput) {
   const layout = templateLayoutSchema.parse(input.template.layout);
   const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
   const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
+  const values = buildRenderValues(input);
 
   return certificateHtml({
     layout,
     width: input.template.width,
     height: input.template.height,
     background: input.template.background,
-    values: input.values,
+    values,
     qrDataUrl,
     verificationCode: input.verificationCode,
   });
@@ -44,7 +48,7 @@ export async function renderPdfBuffer(input: RenderInput) {
   if (layout.baseFileType === "application/pdf" && layout.baseFileDataUrl) {
     return renderPdfFromBaseTemplate(input, layout);
   }
-  if (layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl) {
+  if (isNativeDocxBaseLayout(layout)) {
     const nativePdf = await renderPdfFromNativeDocxBaseTemplate(input, layout);
     if (nativePdf) return nativePdf;
 
@@ -80,16 +84,17 @@ export async function renderPdfBuffer(input: RenderInput) {
 
 export async function renderDocxBuffer(input: RenderInput) {
   const layout = templateLayoutSchema.parse(input.template.layout);
-  if (layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl) {
+  if (isNativeDocxBaseLayout(layout)) {
     return renderDocxFromBaseTemplate(input, layout);
   }
+  const values = buildRenderValues(input);
 
   const lines = layout.elements
     .filter((element) => element.type !== "image" && element.type !== "qr")
     .map((element) =>
       element.type === "variable" && element.variableKey
-        ? input.values[element.variableKey] ?? ""
-        : fillTemplateText(element.content, input.values),
+        ? values[element.variableKey] ?? ""
+        : fillTemplateText(element.content, values),
     )
     .filter(Boolean);
 
@@ -135,11 +140,11 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
   const pdfDocument = await PDFDocument.load(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
   const firstPage = pdfDocument.getPage(0);
   const { width: pageWidth, height: pageHeight } = firstPage.getSize();
-  const regularFont = await pdfDocument.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDocument.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedPdfFonts(pdfDocument);
   const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
   const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
   const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
+  const values = buildRenderValues(input);
 
   for (const element of layout.elements) {
     const x = (element.x / input.template.width) * pageWidth;
@@ -147,7 +152,6 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
     const elementWidth = (element.width / input.template.width) * pageWidth;
     const elementHeight = (element.height / input.template.height) * pageHeight;
     const fontSize = (element.fontSize / input.template.height) * pageHeight;
-    const y = pageHeight - yFromTop - elementHeight + Math.max(4, elementHeight / 2 - fontSize / 2);
 
     if (element.type === "qr") {
       firstPage.drawImage(qrImage, {
@@ -161,26 +165,15 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
 
     if (element.type === "image") continue;
 
-    const text =
-      element.type === "variable" && element.variableKey
-        ? input.values[element.variableKey] ?? ""
-        : fillTemplateText(element.content, input.values);
-    const font = element.bold ? boldFont : regularFont;
-    const textWidth = font.widthOfTextAtSize(text, fontSize);
-    const textX =
-      element.align === "right"
-        ? x + Math.max(0, elementWidth - textWidth)
-        : element.align === "center"
-          ? x + Math.max(0, (elementWidth - textWidth) / 2)
-          : x;
-
-    firstPage.drawText(text, {
-      x: textX,
-      y,
-      size: fontSize,
-      font,
-      color: hexToRgb(element.color),
-      maxWidth: elementWidth,
+    drawPdfTextElement(firstPage, {
+      text: resolveElementText(element, values),
+      x,
+      topY: pageHeight - yFromTop,
+      width: elementWidth,
+      height: elementHeight,
+      fontSize,
+      element,
+      fonts,
     });
   }
 
@@ -189,6 +182,10 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
 
 async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const docxBuffer = renderDocxFromBaseTemplate(input, layout);
+  const microsoftGraphPdf = await convertDocxToPdfWithMicrosoftGraph(docxBuffer);
+  if (microsoftGraphPdf) return Buffer.from(microsoftGraphPdf);
+  const cloudConvertPdf = await convertDocxToPdfWithCloudConvert(docxBuffer);
+  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
   const gotenbergPdf = await convertDocxToPdfWithGotenberg(docxBuffer);
   if (gotenbergPdf) return Buffer.from(gotenbergPdf);
   const libreOfficePdf = await convertDocxToPdfBuffer(docxBuffer);
@@ -199,11 +196,11 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
 async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
   const pdfDocument = await PDFDocument.create();
   const page = pdfDocument.addPage([input.template.width, input.template.height]);
-  const regularFont = await pdfDocument.embedFont(StandardFonts.Helvetica);
-  const boldFont = await pdfDocument.embedFont(StandardFonts.HelveticaBold);
+  const fonts = await embedPdfFonts(pdfDocument);
   const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
   const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
   const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
+  const values = buildRenderValues(input);
 
   page.drawRectangle({
     x: 0,
@@ -230,8 +227,6 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
   });
 
   for (const element of layout.elements) {
-    const y = input.template.height - element.y - element.height + Math.max(4, element.height / 2 - element.fontSize / 2);
-
     if (element.type === "qr") {
       page.drawImage(qrImage, {
         x: element.x,
@@ -244,26 +239,15 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
 
     if (element.type === "image") continue;
 
-    const text =
-      element.type === "variable" && element.variableKey
-        ? input.values[element.variableKey] ?? ""
-        : fillTemplateText(element.content, input.values);
-    const font = element.bold ? boldFont : regularFont;
-    const textWidth = font.widthOfTextAtSize(text, element.fontSize);
-    const x =
-      element.align === "right"
-        ? element.x + Math.max(0, element.width - textWidth)
-        : element.align === "center"
-          ? element.x + Math.max(0, (element.width - textWidth) / 2)
-          : element.x;
-
-    page.drawText(text, {
-      x,
-      y,
-      size: element.fontSize,
-      font,
-      color: hexToRgb(element.color),
-      maxWidth: element.width,
+    drawPdfTextElement(page, {
+      text: resolveElementText(element, values),
+      x: element.x,
+      topY: input.template.height - element.y,
+      width: element.width,
+      height: element.height,
+      fontSize: element.fontSize,
+      element,
+      fonts,
     });
   }
 
@@ -272,24 +256,186 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
 
 function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const zip = new PizZip(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
+  const sourceText = [
+    layout.basePreviewHtml ?? "",
+    zip.file("word/document.xml")?.asText() ?? "",
+  ].join("\n");
+  const values = expandTemplateValues(buildRenderValues(input), sourceText);
   const document = new Docxtemplater(zip, {
     paragraphLoop: true,
     linebreaks: true,
     delimiters: { start: "{{", end: "}}" },
+    nullGetter: (part) => {
+      const originalKey = String(part.value ?? "").trim();
+      const normalizedKey = normalizeVariableKey(originalKey);
+      return values[originalKey] ?? values[normalizedKey] ?? "";
+    },
   });
 
-  document.render({
-    ...expandTemplateValues(input.values, layout.basePreviewHtml ?? ""),
-    verificationCode: input.verificationCode,
-    codigo_validacao: input.verificationCode,
-  });
+  document.render(values);
 
   return Buffer.from(document.getZip().generate({ type: "nodebuffer" }));
+}
+
+function buildRenderValues(input: RenderInput): Record<string, string> {
+  return {
+    ...input.values,
+    ...buildVerificationTemplateValues(input.verificationCode),
+  };
 }
 
 function dataUrlToBuffer(dataUrl: string) {
   const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
   return Buffer.from(base64, "base64");
+}
+
+type EmbeddedPdfFonts = {
+  regular: PDFFont;
+  bold: PDFFont;
+  italic: PDFFont;
+  boldItalic: PDFFont;
+};
+
+async function embedPdfFonts(pdfDocument: PDFDocument): Promise<EmbeddedPdfFonts> {
+  const [regular, bold, italic, boldItalic] = await Promise.all([
+    pdfDocument.embedFont(StandardFonts.Helvetica),
+    pdfDocument.embedFont(StandardFonts.HelveticaBold),
+    pdfDocument.embedFont(StandardFonts.HelveticaOblique),
+    pdfDocument.embedFont(StandardFonts.HelveticaBoldOblique),
+  ]);
+
+  return { regular, bold, italic, boldItalic };
+}
+
+function resolveElementText(element: TemplateLayout["elements"][number], values: Record<string, string>) {
+  return element.type === "variable" && element.variableKey
+    ? values[element.variableKey] ?? ""
+    : fillTemplateText(element.content, values);
+}
+
+function drawPdfTextElement(
+  page: PDFPage,
+  {
+    text,
+    x,
+    topY,
+    width,
+    height,
+    fontSize,
+    element,
+    fonts,
+  }: {
+    text: string;
+    x: number;
+    topY: number;
+    width: number;
+    height: number;
+    fontSize: number;
+    element: TemplateLayout["elements"][number];
+    fonts: EmbeddedPdfFonts;
+  },
+) {
+  const font = resolvePdfFont(element, fonts);
+  const lineHeight = fontSize * resolveLineHeight(element.lineHeight);
+  const lines = wrapPdfText(text, font, fontSize, width);
+  const contentHeight = Math.max(fontSize, lines.length * lineHeight);
+  const verticalOffset = element.type === "text" ? 0 : Math.max(0, (height - contentHeight) / 2);
+  let y = topY - verticalOffset - fontSize;
+
+  for (const line of lines) {
+    if (y < topY - height) break;
+
+    const lineWidth = font.widthOfTextAtSize(line, fontSize);
+    const textX =
+      element.align === "right"
+        ? x + Math.max(0, width - lineWidth)
+        : element.align === "center"
+          ? x + Math.max(0, (width - lineWidth) / 2)
+          : x;
+
+    page.drawText(line, {
+      x: textX,
+      y,
+      size: fontSize,
+      font,
+      color: hexToRgb(element.color),
+    });
+
+    if (element.underline) {
+      const underlineY = y - Math.max(1, fontSize * 0.08);
+      page.drawLine({
+        start: { x: textX, y: underlineY },
+        end: { x: textX + lineWidth, y: underlineY },
+        thickness: Math.max(0.5, fontSize * 0.055),
+        color: hexToRgb(element.color),
+      });
+    }
+
+    y -= lineHeight;
+  }
+}
+
+function resolvePdfFont(element: TemplateLayout["elements"][number], fonts: EmbeddedPdfFonts) {
+  if (element.bold && element.italic) return fonts.boldItalic;
+  if (element.bold) return fonts.bold;
+  if (element.italic) return fonts.italic;
+  return fonts.regular;
+}
+
+function wrapPdfText(text: string, font: PDFFont, fontSize: number, width: number) {
+  const sourceLines = text.split(/\r?\n/);
+  const wrapped: string[] = [];
+
+  for (const sourceLine of sourceLines) {
+    const words = sourceLine.split(/(\s+)/).filter((part) => part.length > 0);
+    let current = "";
+
+    for (const word of words) {
+      const candidate = current ? `${current}${word}` : word.trimStart();
+      if (!candidate) continue;
+
+      if (font.widthOfTextAtSize(candidate, fontSize) <= width || !current) {
+        if (font.widthOfTextAtSize(candidate, fontSize) <= width) {
+          current = candidate;
+          continue;
+        }
+
+        const pieces = splitLongPdfWord(candidate, font, fontSize, width);
+        wrapped.push(...pieces.slice(0, -1));
+        current = pieces.at(-1) ?? "";
+        continue;
+      }
+
+      wrapped.push(current.trimEnd());
+      current = word.trimStart();
+    }
+
+    wrapped.push(current);
+  }
+
+  return wrapped.length ? wrapped : [""];
+}
+
+function splitLongPdfWord(word: string, font: PDFFont, fontSize: number, width: number) {
+  const pieces: string[] = [];
+  let current = "";
+
+  for (const char of word) {
+    const candidate = `${current}${char}`;
+    if (current && font.widthOfTextAtSize(candidate, fontSize) > width) {
+      pieces.push(current);
+      current = char;
+    } else {
+      current = candidate;
+    }
+  }
+
+  if (current) pieces.push(current);
+  return pieces;
+}
+
+function resolveLineHeight(value: number | undefined) {
+  return Number.isFinite(value) && value ? Math.min(Math.max(value, 0.8), 2.4) : 1.15;
 }
 
 function hexToRgb(hex: string) {
@@ -335,7 +481,7 @@ function certificateHtml({
 
   const elements = layout.elements
     .map((element) => {
-      const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};text-align:${element.align};display:flex;align-items:center;justify-content:${justify(element.align)};overflow:hidden;`;
+      const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};font-style:${element.italic ? "italic" : "normal"};text-decoration:${element.underline ? "underline" : "none"};text-align:${element.align};display:flex;align-items:${element.type === "text" ? "flex-start" : "center"};justify-content:${justify(element.align)};overflow:hidden;white-space:pre-wrap;word-break:break-word;line-height:${resolveLineHeight(element.lineHeight)};`;
 
       if (element.type === "image") {
         return `<img src="${escapeHtml(element.content)}" style="${common};object-fit:contain;" />`;
@@ -350,7 +496,7 @@ function certificateHtml({
           ? values[element.variableKey] ?? ""
           : fillTemplateText(element.content, values);
 
-      return `<div style="${common};line-height:1.15;">${escapeHtml(text)}</div>`;
+      return `<div style="${common}">${escapeHtml(text)}</div>`;
     })
     .join("");
 
@@ -361,6 +507,10 @@ function justify(align: "left" | "center" | "right") {
   if (align === "left") return "flex-start";
   if (align === "right") return "flex-end";
   return "center";
+}
+
+function isNativeDocxBaseLayout(layout: TemplateLayout) {
+  return layout.baseDocumentMode !== "editable" && Boolean(layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl);
 }
 
 function escapeHtml(value: string) {

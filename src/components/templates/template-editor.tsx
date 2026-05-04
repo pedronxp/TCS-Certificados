@@ -4,7 +4,7 @@
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useRouter } from "next/navigation";
-import { AlignCenter, AlignLeft, AlignRight, FileUp, ImagePlus, Plus, QrCode, RefreshCcw, Save, Trash2, Type, X } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Copy, FileUp, ImagePlus, Italic, Plus, QrCode, RefreshCcw, Save, Trash2, Type, Underline, X } from "lucide-react";
 import {
   defaultLayout,
   extractVariableKeys,
@@ -18,7 +18,7 @@ import {
   type TemplateVariableDefinition,
 } from "@/lib/certificate-layout";
 import { useConfirmDialog } from "@/components/confirmation-dialog";
-import { dataUrlToHtmlDocument, extractDocumentPreview } from "@/lib/document-extract.client";
+import { dataUrlToHtmlDocument, extractDocumentPreview, extractEditableDocxElementsFromDataUrl } from "@/lib/document-extract.client";
 import { templateImportDraftStorageKey, type TemplateImportDraft } from "@/lib/template-import-draft";
 
 type TemplateEditorProps = {
@@ -39,10 +39,16 @@ type TextSelection = {
   end: number;
 };
 
+type ResizeHandle = "nw" | "ne" | "sw" | "se";
+
 const PAGE_PRESETS = {
   landscape: { label: "A4 paisagem", width: 1123, height: 794 },
   portrait: { label: "A4 retrato", width: 794, height: 1123 },
 } as const;
+
+const FONT_OPTIONS = ["Arial", "Georgia", "Times New Roman", "Verdana", "Tahoma", "Courier New"] as const;
+const LINE_HEIGHT_OPTIONS = [1, 1.15, 1.3, 1.5, 1.8, 2] as const;
+const RESIZE_HANDLES: ResizeHandle[] = ["nw", "ne", "sw", "se"];
 
 const LEAVE_WARNING =
   "Voce tem alteracoes nao salvas. Se sair agora, vai perder o que foi mudado. Deseja sair mesmo?";
@@ -75,7 +81,10 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
   const skipLeaveWarningRef = useRef(false);
   const previewViewportRef = useRef<HTMLDivElement | null>(null);
   const contentTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const inlineTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const [contentSelection, setContentSelection] = useState<TextSelection>({ start: 0, end: 0 });
+  const [inlineEditId, setInlineEditId] = useState("");
+  const [newVariableLabel, setNewVariableLabel] = useState("");
   const dragRef = useRef<{
     id: string;
     pointerId: number;
@@ -83,6 +92,17 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     startY: number;
     originX: number;
     originY: number;
+  } | null>(null);
+  const resizeRef = useRef<{
+    id: string;
+    pointerId: number;
+    handle: ResizeHandle;
+    startX: number;
+    startY: number;
+    originX: number;
+    originY: number;
+    originWidth: number;
+    originHeight: number;
   } | null>(null);
 
   const selected = layout.elements.find((element) => element.id === selectedId) ?? layout.elements[0];
@@ -108,10 +128,13 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       (selectedContentText || selected.content.trim()),
   );
   const hasImportedBase = Boolean(background || layout.baseRenderDataUrl || layout.baseImageDataUrl || layout.baseFileDataUrl || layout.basePreviewHtml);
+  const isEditableDocxBase = layout.baseDocumentMode === "editable" && Boolean(layout.baseFileType?.includes("wordprocessingml"));
   const allVariables = useMemo(() => {
     const map = new Map<string, { label: string; required: boolean }>();
-    for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
-      map.set(key, { label: labelFromKey(key), required: true });
+    if (layout.baseDocumentMode !== "editable") {
+      for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
+        map.set(key, { label: labelFromKey(key), required: true });
+      }
     }
     for (const el of layout.elements) {
       for (const key of extractVariableKeys(el.content ?? "")) {
@@ -125,7 +148,15 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       if (def.key) map.set(def.key, { label: def.label || labelFromKey(def.key), required: def.required });
     }
     return [...map.entries()].map(([key, v]) => ({ key, label: v.label, required: v.required }));
-  }, [layout.basePreviewHtml, layout.elements, layout.variableDefinitions]);
+  }, [layout.baseDocumentMode, layout.basePreviewHtml, layout.elements, layout.variableDefinitions]);
+  const selectedVariableIssues = useMemo(
+    () => findVariableIssues(selected?.content ?? ""),
+    [selected?.content],
+  );
+  const selectedContentVariables = useMemo(
+    () => extractVariableKeys(selected?.content ?? ""),
+    [selected?.content],
+  );
 
   useEffect(() => {
     let frameId = 0;
@@ -162,12 +193,10 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const rawDraft = window.sessionStorage.getItem(templateImportDraftStorageKey);
     if (!rawDraft) return;
 
-    let timeoutId: number | undefined;
-
     try {
       const draft = parseImportDraft(rawDraft);
 
-      timeoutId = window.setTimeout(() => {
+      window.setTimeout(() => {
         setName(draft.name);
         setDescription(draft.description);
         setOrientation(draft.orientation);
@@ -183,11 +212,61 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     } finally {
       window.sessionStorage.removeItem(templateImportDraftStorageKey);
     }
+  }, [initial]);
+
+  useEffect(() => {
+    if (!layout.baseFileDataUrl || !layout.baseFileType?.includes("wordprocessingml")) return;
+    if (layout.baseDocumentMode === "editable" || layout.elements.length > 0) return;
+
+    let cancelled = false;
+
+    void extractEditableDocxElementsFromDataUrl(layout.baseFileDataUrl, {
+      width,
+      height,
+      orientation: orientation === "portrait" ? "portrait" : "landscape",
+      border: layout.basePageBorder,
+    }).then((elements) => {
+      if (cancelled || elements.length === 0) return;
+
+      setLayout((current) => {
+        if (
+          current.baseDocumentMode === "editable" ||
+          current.elements.length > 0 ||
+          current.baseFileDataUrl !== layout.baseFileDataUrl
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+          baseDocumentMode: "editable",
+          baseRenderDataUrl: undefined,
+          baseRenderFileType: undefined,
+          baseRenderEngine: undefined,
+          baseImageDataUrl: undefined,
+          baseImageEngine: undefined,
+          elements,
+        };
+      });
+      setSelectedId(elements[0]?.id ?? "");
+
+      const maxBottom = Math.max(0, ...elements.map((element) => element.y + element.height));
+      if (maxBottom > height) setHeight(Math.ceil(maxBottom + 24));
+    });
 
     return () => {
-      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      cancelled = true;
     };
-  }, [initial]);
+  }, [
+    height,
+    layout.baseDocumentMode,
+    layout.baseFileDataUrl,
+    layout.baseFileType,
+    layout.basePageBorder,
+    layout.elements.length,
+    orientation,
+    width,
+  ]);
 
   useEffect(() => {
     if (!hasUnsavedChanges) return;
@@ -235,14 +314,91 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     return () => document.removeEventListener("click", handleDocumentClick, true);
   }, [confirm, hasUnsavedChanges, router]);
 
+  useEffect(() => {
+    if (!inlineEditId) return;
+
+    window.setTimeout(() => {
+      inlineTextareaRef.current?.focus();
+      inlineTextareaRef.current?.select();
+    }, 0);
+  }, [inlineEditId]);
+
+  useEffect(() => {
+    function handleGlobalKeyDown(event: KeyboardEvent) {
+      if (!selected || isTypingTarget(event.target)) return;
+
+      const key = event.key;
+      if (key === "Delete" || key === "Backspace") {
+        event.preventDefault();
+        const deletedId = selected.id;
+        setLayout((current) => ({ ...current, elements: current.elements.filter((item) => item.id !== deletedId) }));
+        setSelectedId("");
+        setInlineEditId("");
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && key.toLowerCase() === "d") {
+        event.preventDefault();
+        const copy = duplicateElement(selected, width, height);
+        setLayout((current) => ({ ...current, elements: [...current.elements, copy] }));
+        setSelectedId(copy.id);
+        return;
+      }
+
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) return;
+
+      event.preventDefault();
+      const step = event.shiftKey ? 10 : 1;
+      const deltaX = key === "ArrowLeft" ? -step : key === "ArrowRight" ? step : 0;
+      const deltaY = key === "ArrowUp" ? -step : key === "ArrowDown" ? step : 0;
+      const selectedId = selected.id;
+
+      setLayout((current) => ({
+        ...current,
+        elements: current.elements.map((element) =>
+          element.id === selectedId
+            ? {
+                ...element,
+                x: clamp(element.x + deltaX, 0, Math.max(0, width - element.width)),
+                y: clamp(element.y + deltaY, 0, Math.max(0, height - element.height)),
+              }
+            : element,
+        ),
+      }));
+    }
+
+    document.addEventListener("keydown", handleGlobalKeyDown);
+    return () => document.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [height, selected, width]);
+
   function updateElement(patch: Partial<TemplateElement>) {
     if (!selected) return;
+    updateElementById(selected.id, patch);
+  }
+
+  function updateElementById(id: string, patch: Partial<TemplateElement>) {
     setLayout((current) => ({
       ...current,
       elements: current.elements.map((element) =>
-        element.id === selected.id ? { ...element, ...patch } : element,
+        element.id === id ? { ...element, ...patch } : element,
       ),
     }));
+  }
+
+  function deleteSelectedElement() {
+    if (!selected) return;
+    const id = selected.id;
+    setLayout((current) => ({ ...current, elements: current.elements.filter((item) => item.id !== id) }));
+    setSelectedId("");
+    setInlineEditId("");
+  }
+
+  function duplicateSelectedElement() {
+    if (!selected) return;
+    const copy = duplicateElement(selected, width, height);
+    setLayout((current) => ({ ...current, elements: [...current.elements, copy] }));
+    setSelectedId(copy.id);
+    setInlineEditId("");
   }
 
   function syncContentSelection() {
@@ -260,9 +416,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const fallbackText = selectedText || content.trim();
     if (!fallbackText) return;
 
-    const defaultLabel = suggestVariableLabel(fallbackText);
-    const label = window.prompt("Label do campo no formulario", defaultLabel)?.trim();
-    if (!label) return;
+    const label = suggestVariableLabel(fallbackText);
 
     const key = uniqueVariableKey(normalizeVariableKey(label) || normalizeVariableKey(fallbackText) || "campo", layout);
     const token = `{{${key}}}`;
@@ -296,6 +450,46 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     }, 0);
   }
 
+  function insertVariableAtCursor(key: string, label?: string) {
+    if (!selected || (selected.type !== "text" && selected.type !== "variable")) return;
+
+    const normalizedKey = normalizeVariableKey(key);
+    if (!normalizedKey) return;
+
+    const definition: TemplateVariableDefinition = {
+      key: normalizedKey,
+      label: label?.trim() || labelFromKey(normalizedKey),
+      required: true,
+    };
+    const range = getSelectedContentRange(selected.content, contentSelection);
+    const token = `{{${normalizedKey}}}`;
+    const nextContent = `${selected.content.slice(0, range.start)}${token}${selected.content.slice(range.end)}`;
+    const cursor = range.start + token.length;
+
+    setLayout((current) => ({
+      ...upsertVariableDefinition(current, definition),
+      elements: current.elements.map((element) => {
+        if (element.id !== selected.id) return element;
+
+        return {
+          ...element,
+          content: nextContent,
+          type: element.type === "variable" && !element.variableKey ? "variable" : element.type,
+          variableKey: element.type === "variable" && !element.variableKey ? normalizedKey : element.variableKey,
+          variableLabel: element.type === "variable" && !element.variableLabel ? definition.label : element.variableLabel,
+        };
+      }),
+    }));
+
+    window.setTimeout(() => {
+      const textarea = contentTextareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(cursor, cursor);
+      setContentSelection({ start: cursor, end: cursor });
+    }, 0);
+  }
+
   function addElement(type: TemplateElement["type"]) {
     addField(type);
   }
@@ -320,6 +514,9 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       color: "#111827",
       align: "center",
       bold: false,
+      italic: false,
+      underline: false,
+      lineHeight: 1.15,
     };
     setLayout((current) => ({ ...current, elements: [...current.elements, element] }));
     setSelectedId(id);
@@ -343,10 +540,11 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
   }
 
   function addNewVariableDefinition() {
-    const label = window.prompt("Nome do campo (ex: Nome do participante)")?.trim();
+    const label = newVariableLabel.trim();
     if (!label) return;
     const key = uniqueVariableKey(normalizeVariableKey(label) || "campo", layout);
     setLayout((current) => upsertVariableDefinition(current, { key, label, required: true }));
+    setNewVariableLabel("");
   }
 
   function applyPagePreset(nextOrientation: string) {
@@ -358,8 +556,9 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     }
   }
 
-  function beginDrag(event: ReactPointerEvent<HTMLButtonElement>, element: TemplateElement) {
+  function beginDrag(event: ReactPointerEvent<HTMLDivElement>, element: TemplateElement) {
     if (event.button !== 0) return;
+    if (inlineEditId === element.id || isTypingTarget(event.target) || isResizeHandleTarget(event.target)) return;
     setSelectedId(element.id);
     dragRef.current = {
       id: element.id,
@@ -372,7 +571,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function moveDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+  function moveDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag) return;
 
@@ -392,13 +591,89 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     }));
   }
 
-  function endDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+  function endDrag(event: ReactPointerEvent<HTMLDivElement>) {
     const drag = dragRef.current;
     if (!drag) return;
     if (event.currentTarget.hasPointerCapture(drag.pointerId)) {
       event.currentTarget.releasePointerCapture(drag.pointerId);
     }
     dragRef.current = null;
+  }
+
+  function beginResize(event: ReactPointerEvent<HTMLSpanElement>, element: TemplateElement, handle: ResizeHandle) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedId(element.id);
+    resizeRef.current = {
+      id: element.id,
+      pointerId: event.pointerId,
+      handle,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: element.x,
+      originY: element.y,
+      originWidth: element.width,
+      originHeight: element.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveResize(event: ReactPointerEvent<HTMLSpanElement>) {
+    const resize = resizeRef.current;
+    if (!resize) return;
+
+    const deltaX = (event.clientX - resize.startX) / scale;
+    const deltaY = (event.clientY - resize.startY) / scale;
+
+    setLayout((current) => ({
+      ...current,
+      elements: current.elements.map((element) => {
+        if (element.id !== resize.id) return element;
+
+        const minSize = element.type === "qr" ? 48 : 20;
+        let nextX = resize.originX;
+        let nextY = resize.originY;
+        let nextWidth = resize.originWidth;
+        let nextHeight = resize.originHeight;
+
+        if (resize.handle.includes("e")) nextWidth = resize.originWidth + deltaX;
+        if (resize.handle.includes("s")) nextHeight = resize.originHeight + deltaY;
+        if (resize.handle.includes("w")) {
+          nextX = resize.originX + deltaX;
+          nextWidth = resize.originWidth - deltaX;
+        }
+        if (resize.handle.includes("n")) {
+          nextY = resize.originY + deltaY;
+          nextHeight = resize.originHeight - deltaY;
+        }
+
+        nextWidth = Math.max(minSize, Math.round(nextWidth));
+        nextHeight = Math.max(minSize, Math.round(nextHeight));
+        nextX = clamp(Math.round(nextX), 0, Math.max(0, width - nextWidth));
+        nextY = clamp(Math.round(nextY), 0, Math.max(0, height - nextHeight));
+
+        if (nextX + nextWidth > width) nextWidth = width - nextX;
+        if (nextY + nextHeight > height) nextHeight = height - nextY;
+
+        return {
+          ...element,
+          x: nextX,
+          y: nextY,
+          width: Math.max(minSize, nextWidth),
+          height: Math.max(minSize, nextHeight),
+        };
+      }),
+    }));
+  }
+
+  function endResize(event: ReactPointerEvent<HTMLSpanElement>) {
+    const resize = resizeRef.current;
+    if (!resize) return;
+    if (event.currentTarget.hasPointerCapture(resize.pointerId)) {
+      event.currentTarget.releasePointerCapture(resize.pointerId);
+    }
+    resizeRef.current = null;
   }
 
   async function readFile(file: File) {
@@ -414,18 +689,20 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const dataUrl = await readFile(file);
     const fileType = file.type || guessFileType(file.name);
     const extracted = await extractDocumentPreview(file);
+    const isEditableDocx = fileType.includes("wordprocessingml") && extracted.editable && extracted.elements.length > 0;
     const nextBase = uploadedBaseLayout({
       fileName: file.name,
       fileType,
       dataUrl,
       previewHtml: extracted.previewHtml,
-      renderDataUrl: extracted.renderDataUrl,
-      renderFileType: extracted.renderFileType,
-      renderEngine: extracted.renderEngine,
-      imageDataUrl: extracted.imageDataUrl,
-      imageEngine: extracted.imageEngine,
+      renderDataUrl: isEditableDocx ? undefined : extracted.renderDataUrl,
+      renderFileType: isEditableDocx ? undefined : extracted.renderFileType,
+      renderEngine: isEditableDocx ? undefined : extracted.renderEngine,
+      imageDataUrl: isEditableDocx ? undefined : extracted.imageDataUrl,
+      imageEngine: isEditableDocx ? undefined : extracted.imageEngine,
       elements: extracted.elements,
       pageBorder: extracted.page?.border,
+      baseDocumentMode: isEditableDocx ? "editable" : "native",
     });
 
     if (fileType.startsWith("image/")) {
@@ -581,42 +858,42 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
                 backgroundPosition: "center",
               }}
             >
-              {layout.baseRenderDataUrl && layout.baseRenderFileType === "application/pdf" ? (
+              {!isEditableDocxBase && layout.baseRenderDataUrl && layout.baseRenderFileType === "application/pdf" ? (
                 <embed
                   src={layout.baseRenderDataUrl}
                   type="application/pdf"
                   className="absolute inset-0 size-full"
                 />
               ) : null}
-              {layout.baseRenderDataUrl && layout.baseRenderFileType?.startsWith("image/") ? (
+              {!isEditableDocxBase && layout.baseRenderDataUrl && layout.baseRenderFileType?.startsWith("image/") ? (
                 <img
                   src={layout.baseRenderDataUrl}
                   alt=""
                   className="pointer-events-none absolute inset-0 size-full object-fill"
                 />
               ) : null}
-              {layout.baseFileType === "application/pdf" && layout.baseFileDataUrl && !layout.baseRenderDataUrl ? (
+              {!isEditableDocxBase && layout.baseFileType === "application/pdf" && layout.baseFileDataUrl && !layout.baseRenderDataUrl ? (
                 <embed
                   src={layout.baseFileDataUrl}
                   type="application/pdf"
                   className="absolute inset-0 size-full"
                 />
               ) : null}
-              {!layout.baseRenderDataUrl && layout.baseImageDataUrl ? (
+              {!isEditableDocxBase && !layout.baseRenderDataUrl && layout.baseImageDataUrl ? (
                 <img
                   src={layout.baseImageDataUrl}
                   alt=""
                   className="pointer-events-none absolute inset-0 size-full object-fill"
                 />
-              ) : !layout.baseRenderDataUrl && layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl ? (
+              ) : !isEditableDocxBase && !layout.baseRenderDataUrl && layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl ? (
                 <DocxPreviewSurface dataUrl={layout.baseFileDataUrl} />
-              ) : !layout.baseRenderDataUrl && layout.baseFileType?.includes("wordprocessingml") && layout.basePreviewHtml ? (
+              ) : !isEditableDocxBase && !layout.baseRenderDataUrl && layout.baseFileType?.includes("wordprocessingml") && layout.basePreviewHtml ? (
                 <iframe
                   title="Preview DOCX"
                   srcDoc={dataUrlToHtmlDocument(layout.basePreviewHtml)}
                   className="absolute inset-0 size-full border-0 bg-white"
                 />
-              ) : layout.baseFileType?.includes("wordprocessingml") && layout.baseFileName && !layout.baseRenderDataUrl && !layout.basePreviewHtml && !layout.baseImageDataUrl ? (
+              ) : !isEditableDocxBase && layout.baseFileType?.includes("wordprocessingml") && layout.baseFileName && !layout.baseRenderDataUrl && !layout.basePreviewHtml && !layout.baseImageDataUrl ? (
                 <div className="absolute inset-0 grid place-items-center bg-slate-50 p-10 text-center">
                   <div>
                     <FileUp className="mx-auto size-12 text-teal-700" />
@@ -642,43 +919,103 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
                   }}
                 />
               ) : null}
-              {layout.elements.map((element) => (
-                <button
-                  key={element.id}
-                  type="button"
-                  onPointerDown={(event) => beginDrag(event, element)}
-                  onPointerMove={moveDrag}
-                  onPointerUp={endDrag}
-                  onPointerCancel={endDrag}
-                  onClick={() => setSelectedId(element.id)}
-                  className={`absolute flex touch-none cursor-move overflow-hidden border text-left ${selectedId === element.id ? "border-teal-700 ring-2 ring-teal-200" : "border-transparent hover:border-slate-300"}`}
-                  style={{
-                    left: element.x,
-                    top: element.y,
-                    width: element.width,
-                    height: element.height,
-                    color: element.color,
-                    fontFamily: element.fontFamily,
-                    fontSize: element.fontSize,
-                    fontWeight: element.bold ? 700 : 400,
-                    alignItems: element.type === "text" ? "flex-start" : "center",
-                    justifyContent: element.align === "left" ? "flex-start" : element.align === "right" ? "flex-end" : "center",
-                    padding: element.type === "text" || element.type === "variable" ? "2px 4px" : 0,
-                    textAlign: element.align,
-                    whiteSpace: "pre-wrap",
-                    lineHeight: 1.15,
-                    wordBreak: "break-word",
-                  }}
-                >
-                  {element.type === "qr" ? (
-                    <QrCode className="mx-auto size-16" />
-                  ) : element.type === "image" ? (
-                    <img src={element.content} alt="" className="pointer-events-none size-full object-contain" />
-                  ) : (
-                    element.content
-                  )}
-                </button>
-              ))}
+              {layout.elements.map((element) => {
+                const isSelected = selectedId === element.id;
+                const isTextElement = element.type === "text" || element.type === "variable";
+                const isInlineEditing = inlineEditId === element.id && isTextElement;
+
+                return (
+                  <div
+                    key={element.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Elemento ${element.type}`}
+                    onPointerDown={(event) => beginDrag(event, element)}
+                    onPointerMove={moveDrag}
+                    onPointerUp={endDrag}
+                    onPointerCancel={endDrag}
+                    onClick={() => setSelectedId(element.id)}
+                    onDoubleClick={() => {
+                      setSelectedId(element.id);
+                      if (isTextElement) setInlineEditId(element.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== "Enter" && event.key !== " ") return;
+                      event.preventDefault();
+                      setSelectedId(element.id);
+                      if (event.key === "Enter" && isTextElement) setInlineEditId(element.id);
+                    }}
+                    className={`absolute flex touch-none overflow-visible border text-left outline-none ${isInlineEditing ? "cursor-text" : "cursor-move"} ${isSelected ? "border-teal-700 ring-2 ring-teal-200" : "border-transparent hover:border-slate-300"}`}
+                    style={{
+                      left: element.x,
+                      top: element.y,
+                      width: element.width,
+                      height: element.height,
+                      color: element.color,
+                      fontFamily: element.fontFamily,
+                      fontSize: element.fontSize,
+                      fontWeight: element.bold ? 700 : 400,
+                      fontStyle: element.italic ? "italic" : "normal",
+                      textDecoration: element.underline ? "underline" : "none",
+                      alignItems: element.type === "text" ? "flex-start" : "center",
+                      justifyContent: element.align === "left" ? "flex-start" : element.align === "right" ? "flex-end" : "center",
+                      padding: isTextElement ? "2px 4px" : 0,
+                      textAlign: element.align,
+                      whiteSpace: "pre-wrap",
+                      lineHeight: element.lineHeight,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {isInlineEditing ? (
+                      <textarea
+                        ref={inlineTextareaRef}
+                        value={element.content}
+                        onChange={(event) => updateElementById(element.id, { content: event.target.value })}
+                        onBlur={() => setInlineEditId("")}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape" || ((event.ctrlKey || event.metaKey) && event.key === "Enter")) {
+                            event.preventDefault();
+                            setInlineEditId("");
+                          }
+                        }}
+                        className="absolute inset-0 size-full resize-none border-0 bg-white/90 p-1 outline-none ring-2 ring-teal-400"
+                        style={{
+                          color: element.color,
+                          fontFamily: element.fontFamily,
+                          fontSize: element.fontSize,
+                          fontWeight: element.bold ? 700 : 400,
+                          fontStyle: element.italic ? "italic" : "normal",
+                          textDecoration: element.underline ? "underline" : "none",
+                          textAlign: element.align,
+                          lineHeight: element.lineHeight,
+                        }}
+                      />
+                    ) : element.type === "qr" ? (
+                      <QrCode className="mx-auto size-16" />
+                    ) : element.type === "image" ? (
+                      <img src={element.content} alt="" className="pointer-events-none size-full object-contain" />
+                    ) : (
+                      <span className="block size-full overflow-hidden">{element.content}</span>
+                    )}
+                    {isSelected ? (
+                      <>
+                        {RESIZE_HANDLES.map((handle) => (
+                          <span
+                            key={handle}
+                            data-resize-handle
+                            role="presentation"
+                            onPointerDown={(event) => beginResize(event, element, handle)}
+                            onPointerMove={moveResize}
+                            onPointerUp={endResize}
+                            onPointerCancel={endResize}
+                            className={`absolute z-10 size-3 rounded-full border border-white bg-teal-700 shadow ${handle.includes("n") ? "-top-1.5" : "-bottom-1.5"} ${handle.includes("w") ? "-left-1.5" : "-right-1.5"} ${handle === "nw" || handle === "se" ? "cursor-nwse-resize" : "cursor-nesw-resize"}`}
+                          />
+                        ))}
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -713,14 +1050,14 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
               Modelo: {layout.baseFileName}
               {layout.baseFileType?.includes("wordprocessingml") ? (
                 <p className="mt-1 font-normal text-slate-500">
-                  DOCX preservado como base visual.
+                  {isEditableDocxBase ? "DOCX convertido em campos editaveis." : "DOCX preservado como base visual."}
                 </p>
               ) : null}
             </div>
           ) : null}
           <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
             <p className="font-bold text-slate-800">
-              Folha gerada: {PAGE_PRESETS[orientation as keyof typeof PAGE_PRESETS]?.label ?? "personalizada"}
+              Folha gerada: {pageLabel(orientation, width, height)}
             </p>
             <p className="mt-1">{width} x {height}px</p>
           </div>
@@ -754,11 +1091,23 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
               <button
                 type="button"
                 onClick={addNewVariableDefinition}
+                disabled={!newVariableLabel.trim()}
                 className="inline-flex items-center gap-1 text-xs font-semibold text-teal-700 hover:text-teal-900"
               >
                 <Plus className="size-3" />
                 Nova
               </button>
+            </div>
+            <div className="mb-3 flex gap-2">
+              <input
+                value={newVariableLabel}
+                onChange={(event) => setNewVariableLabel(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") addNewVariableDefinition();
+                }}
+                className="min-w-0 flex-1 rounded border border-teal-200 bg-white px-2 py-1 text-xs"
+                placeholder="Novo campo"
+              />
             </div>
             {allVariables.length === 0 ? (
               <p className="text-xs italic text-teal-600">
@@ -820,39 +1169,125 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
         </div>
 
         {selected ? (
-          <div className="mt-6 border-t border-slate-200 pt-5">
-            <div className="mb-3 flex items-center justify-between">
+          <div className="mt-6 space-y-4 border-t border-slate-200 pt-5">
+            <div className="flex items-center justify-between">
               <h2 className="text-sm font-bold text-slate-900">Elemento selecionado</h2>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => {
-                  setLayout((current) => ({ ...current, elements: current.elements.filter((item) => item.id !== selected.id) }));
-                  setSelectedId("");
-                }}
-                title="Excluir elemento"
-              >
-                <Trash2 className="size-4" />
-              </button>
+              <div className="flex gap-2">
+                <button type="button" className="icon-button" onClick={duplicateSelectedElement} title="Duplicar elemento">
+                  <Copy className="size-4" />
+                </button>
+                <button type="button" className="icon-button" onClick={deleteSelectedElement} title="Excluir elemento">
+                  <Trash2 className="size-4" />
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-4">
-              {selected.type === "text" || selected.type === "variable" ? (
-                <div className="space-y-2">
+            {selected.type === "text" || selected.type === "variable" ? (
+              <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold uppercase text-slate-500">Texto</p>
+                  <button
+                    type="button"
+                    onClick={() => setInlineEditId(selected.id)}
+                    className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                  >
+                    Editar na folha
+                  </button>
+                </div>
+
+                <label className="field">
+                  <span>Conteudo</span>
+                  <textarea
+                    ref={contentTextareaRef}
+                    value={selected.content}
+                    className="min-h-40 font-mono text-sm"
+                    onChange={(event) => {
+                      updateElement({ content: event.target.value });
+                      syncContentSelection();
+                    }}
+                    onSelect={syncContentSelection}
+                    onMouseUp={syncContentSelection}
+                    onKeyUp={syncContentSelection}
+                    onFocus={syncContentSelection}
+                  />
+                </label>
+
+                <div className="grid grid-cols-2 gap-2">
                   <label className="field">
-                    <span>Conteudo</span>
-                    <textarea
-                      ref={contentTextareaRef}
-                      value={selected.content}
+                    <span>Fonte</span>
+                    <select value={selected.fontFamily} onChange={(event) => updateElement({ fontFamily: event.target.value })}>
+                      {FONT_OPTIONS.map((font) => (
+                        <option key={font} value={font}>
+                          {font}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Tamanho</span>
+                    <input type="number" min={6} max={120} value={selected.fontSize} onChange={(event) => updateElement({ fontSize: Number(event.target.value) })} />
+                  </label>
+                  <label className="field">
+                    <span>Altura linha</span>
+                    <select value={selected.lineHeight} onChange={(event) => updateElement({ lineHeight: Number(event.target.value) })}>
+                      {LINE_HEIGHT_OPTIONS.map((lineHeight) => (
+                        <option key={lineHeight} value={lineHeight}>
+                          {lineHeight}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Cor</span>
+                    <input type="color" value={selected.color} onChange={(event) => updateElement({ color: event.target.value })} />
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    ["left", AlignLeft],
+                    ["center", AlignCenter],
+                    ["right", AlignRight],
+                  ].map(([align, Icon]) => (
+                    <button
+                      key={String(align)}
+                      type="button"
+                      className={`icon-button ${selected.align === align ? "border-teal-600 bg-teal-50 text-teal-800" : ""}`}
+                      onClick={() => updateElement({ align: align as "left" | "center" | "right" })}
+                      title={`Alinhar ${align}`}
+                    >
+                      <Icon className="size-4" />
+                    </button>
+                  ))}
+                  <button type="button" className={`rounded-md border px-3 text-sm font-bold ${selected.bold ? "border-teal-600 bg-teal-50 text-teal-800" : "border-slate-300 bg-white"}`} onClick={() => updateElement({ bold: !selected.bold })}>
+                    B
+                  </button>
+                  <button type="button" className={`icon-button ${selected.italic ? "border-teal-600 bg-teal-50 text-teal-800" : ""}`} onClick={() => updateElement({ italic: !selected.italic })} title="Italico">
+                    <Italic className="size-4" />
+                  </button>
+                  <button type="button" className={`icon-button ${selected.underline ? "border-teal-600 bg-teal-50 text-teal-800" : ""}`} onClick={() => updateElement({ underline: !selected.underline })} title="Sublinhado">
+                    <Underline className="size-4" />
+                  </button>
+                </div>
+
+                <div className="grid gap-2">
+                  <label className="field">
+                    <span>Inserir variavel no cursor</span>
+                    <select
+                      value=""
                       onChange={(event) => {
-                        updateElement({ content: event.target.value });
-                        syncContentSelection();
+                        const key = event.target.value;
+                        const variable = allVariables.find((item) => item.key === key);
+                        if (key) insertVariableAtCursor(key, variable?.label);
                       }}
-                      onSelect={syncContentSelection}
-                      onMouseUp={syncContentSelection}
-                      onKeyUp={syncContentSelection}
-                      onFocus={syncContentSelection}
-                    />
+                    >
+                      <option value="">Selecionar variavel</option>
+                      {allVariables.map((variable) => (
+                        <option key={variable.key} value={variable.key}>
+                          {variable.label} ({`{{${variable.key}}}`})
+                        </option>
+                      ))}
+                    </select>
                   </label>
                   <button
                     type="button"
@@ -864,68 +1299,72 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
                     {selectedContentText ? "Transformar selecao em variavel" : "Converter elemento em variavel"}
                   </button>
                 </div>
-              ) : null}
-              {selected.type === "variable" ? (
-                <div className="space-y-4 rounded-md border border-teal-100 bg-teal-50 p-3">
-                  <label className="field">
-                    <span>Label no formulario</span>
-                    <input
-                      value={selected.variableLabel ?? labelFromKey(selected.variableKey ?? "")}
-                      placeholder="Ex: Nome do participante"
-                      onChange={(event) => updateElement({ variableLabel: event.target.value })}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Nome tecnico</span>
-                    <input
-                      value={selected.variableKey ?? ""}
-                      placeholder="Ex: nome_participante"
-                      onChange={(event) => {
-                        const key = normalizeVariableKey(event.target.value);
-                        updateElement({
-                          variableKey: key,
-                          content: `{{${key}}}`,
-                          variableLabel: selected.variableLabel || labelFromKey(key),
-                        });
-                      }}
-                    />
-                  </label>
-                  <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
-                    <input
-                      type="checkbox"
-                      checked={selected.variableRequired}
-                      onChange={(event) => updateElement({ variableRequired: event.target.checked })}
-                      className="size-4"
-                    />
-                    Campo obrigatorio
-                  </label>
-                </div>
-              ) : null}
+
+                {selectedContentVariables.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedContentVariables.map((key) => (
+                      <code key={key} className="rounded bg-white px-1.5 py-0.5 text-xs font-mono text-slate-700">
+                        {`{{${key}}}`}
+                      </code>
+                    ))}
+                  </div>
+                ) : null}
+
+                {selectedVariableIssues.length ? (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+                    {selectedVariableIssues.join(" ")}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {selected.type === "variable" ? (
+              <div className="space-y-4 rounded-lg border border-teal-100 bg-teal-50 p-3">
+                <p className="text-xs font-bold uppercase text-teal-700">Campo</p>
+                <label className="field">
+                  <span>Label no formulario</span>
+                  <input
+                    value={selected.variableLabel ?? labelFromKey(selected.variableKey ?? "")}
+                    placeholder="Ex: Nome do participante"
+                    onChange={(event) => updateElement({ variableLabel: event.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span>Nome tecnico</span>
+                  <input
+                    value={selected.variableKey ?? ""}
+                    placeholder="Ex: nome_participante"
+                    onChange={(event) => {
+                      const key = normalizeVariableKey(event.target.value);
+                      updateElement({
+                        variableKey: key,
+                        content: `{{${key}}}`,
+                        variableLabel: selected.variableLabel || labelFromKey(key),
+                      });
+                    }}
+                  />
+                </label>
+                <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={selected.variableRequired}
+                    onChange={(event) => updateElement({ variableRequired: event.target.checked })}
+                    className="size-4"
+                  />
+                  Campo obrigatorio
+                </label>
+              </div>
+            ) : null}
+
+            <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-3">
+              <p className="text-xs font-bold uppercase text-slate-500">Posicao e tamanho</p>
               <div className="grid grid-cols-2 gap-2">
-                {(["x", "y", "width", "height", "fontSize"] as const).map((key) => (
+                {(["x", "y", "width", "height"] as const).map((key) => (
                   <label key={key} className="field">
                     <span>{key}</span>
                     <input type="number" value={selected[key]} onChange={(event) => updateElement({ [key]: Number(event.target.value) })} />
                   </label>
                 ))}
-                <label className="field">
-                  <span>Cor</span>
-                  <input type="color" value={selected.color} onChange={(event) => updateElement({ color: event.target.value })} />
-                </label>
-              </div>
-              <div className="flex gap-2">
-                {[
-                  ["left", AlignLeft],
-                  ["center", AlignCenter],
-                  ["right", AlignRight],
-                ].map(([align, Icon]) => (
-                  <button key={String(align)} type="button" className="icon-button" onClick={() => updateElement({ align: align as "left" | "center" | "right" })}>
-                    <Icon className="size-4" />
-                  </button>
-                ))}
-                <button type="button" className="rounded-md border border-slate-300 px-3 text-sm font-bold" onClick={() => updateElement({ bold: !selected.bold })}>
-                  B
-                </button>
               </div>
             </div>
           </div>
@@ -1034,6 +1473,12 @@ function positiveNumberOrDefault(value: unknown, fallback: number) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function pageLabel(orientation: string, width: number, height: number) {
+  const preset = PAGE_PRESETS[orientation as keyof typeof PAGE_PRESETS];
+  if (preset && preset.width === width && preset.height === height) return preset.label;
+  return "personalizada";
+}
+
 function mergeImportedBase(current: TemplateLayout, nextBase: TemplateLayout): TemplateLayout {
   if (isDefaultStarterLayout(current)) {
     return nextBase;
@@ -1041,6 +1486,7 @@ function mergeImportedBase(current: TemplateLayout, nextBase: TemplateLayout): T
 
   return {
     ...current,
+    baseDocumentMode: nextBase.baseDocumentMode,
     baseFileName: nextBase.baseFileName,
     baseFileType: nextBase.baseFileType,
     baseFileDataUrl: nextBase.baseFileDataUrl,
@@ -1103,6 +1549,26 @@ function buildSnapshot({
   });
 }
 
+function duplicateElement(element: TemplateElement, pageWidth: number, pageHeight: number): TemplateElement {
+  const offset = 18;
+  return {
+    ...element,
+    id: `${element.type}-${crypto.randomUUID()}`,
+    x: clamp(element.x + offset, 0, Math.max(0, pageWidth - element.width)),
+    y: clamp(element.y + offset, 0, Math.max(0, pageHeight - element.height)),
+  };
+}
+
+function isTypingTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function isResizeHandleTarget(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("[data-resize-handle]"));
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -1117,6 +1583,29 @@ function suggestVariableLabel(value: string) {
   const singleLine = value.replace(/\s+/g, " ").trim();
   if (!singleLine) return "Novo campo";
   return singleLine.length > 60 ? singleLine.slice(0, 57).trimEnd() + "..." : singleLine;
+}
+
+function findVariableIssues(content: string) {
+  const issues: string[] = [];
+  const openCount = content.match(/\{\{/g)?.length ?? 0;
+  const closeCount = content.match(/\}\}/g)?.length ?? 0;
+
+  if (openCount !== closeCount) {
+    issues.push("Ha chaves de variavel sem fechamento.");
+  }
+
+  for (const match of content.matchAll(/\{\{\s*([^{}]*?)\s*\}\}/g)) {
+    if (!normalizeVariableKey(match[1])) {
+      issues.push("Ha uma variavel sem nome valido.");
+    }
+  }
+
+  const textWithoutValidVariables = content.replace(/\{\{\s*[^{}]+?\s*\}\}/g, "");
+  if (textWithoutValidVariables.includes("{{") || textWithoutValidVariables.includes("}}")) {
+    issues.push("Revise o formato das variaveis: use {{nome_do_campo}}.");
+  }
+
+  return [...new Set(issues)];
 }
 
 function uniqueVariableKey(baseKey: string, layout: TemplateLayout) {

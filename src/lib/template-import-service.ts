@@ -68,18 +68,20 @@ async function buildImportedTemplateDraft(input: ImportTemplateInput): Promise<I
   if (isDocx(input.fileName, fileType)) {
     const preview = await buildDocxPreview(input.buffer);
     const orientation = input.orientation ?? preview.page.orientation;
+    const isEditableDocx = preview.editable && preview.elements.length > 0;
     const layout = uploadedBaseLayout({
       fileName: input.fileName,
       fileType,
       dataUrl,
       previewHtml: preview.previewHtml,
-      renderDataUrl: preview.renderDataUrl,
-      renderFileType: preview.renderFileType,
-      renderEngine: preview.renderEngine,
-      imageDataUrl: preview.imageDataUrl,
-      imageEngine: preview.imageEngine,
-      elements: [],
+      renderDataUrl: isEditableDocx ? undefined : preview.renderDataUrl,
+      renderFileType: isEditableDocx ? undefined : preview.renderFileType,
+      renderEngine: isEditableDocx ? undefined : preview.renderEngine,
+      imageDataUrl: isEditableDocx ? undefined : preview.imageDataUrl,
+      imageEngine: isEditableDocx ? undefined : preview.imageEngine,
+      elements: preview.elements,
       pageBorder: preview.page.border,
+      baseDocumentMode: isEditableDocx ? "editable" : "native",
     });
 
     return {

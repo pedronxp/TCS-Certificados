@@ -1,7 +1,7 @@
 import { extractVariableKeys } from "@/lib/certificate-layout";
 import type { TemplateElement, TemplatePageBorder } from "@/lib/certificate-layout";
 
-type ExtractedDocumentPage = {
+export type ExtractedDocumentPage = {
   width: number;
   height: number;
   orientation: "landscape" | "portrait";
@@ -31,20 +31,36 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
     };
   }
 
+  const arrayBuffer = await file.arrayBuffer();
   const serverPreview = await extractDocumentPreviewFromApi(file);
-  if (serverPreview) return serverPreview;
+  if (serverPreview) {
+    const page = serverPreview.page ?? await extractDocxPage(arrayBuffer);
+    const elements = serverPreview.editable
+      ? serverPreview.elements.length > 0
+        ? serverPreview.elements
+        : await extractEditableElementsSafely(arrayBuffer, page)
+      : [];
+
+    return {
+      ...serverPreview,
+      editable: elements.length > 0,
+      elements,
+      page: growPageToFit(page, elements),
+    };
+  }
 
   const mammoth = await import("mammoth/mammoth.browser");
-  const arrayBuffer = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer });
   const previewHtml = rawTextToPreviewHtml(result.value);
   const page = await extractDocxPage(arrayBuffer);
+  const renderedElements = await extractEditableElementsSafely(arrayBuffer, page);
+  const elements = renderedElements.length > 0 ? renderedElements : htmlPreviewToEditableElements(previewHtml);
 
   return {
     previewHtml,
-    editable: false,
-    elements: [] as TemplateElement[],
-    page,
+    editable: elements.length > 0,
+    elements,
+    page: growPageToFit(page, elements),
     variables: extractVariableKeys(result.value),
   };
 }
@@ -69,6 +85,8 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       imageEngine?: string;
       page?: ExtractedDocumentPage;
       variables?: string[];
+      editable?: boolean;
+      elements?: TemplateElement[];
     };
 
     return {
@@ -79,8 +97,8 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       imageDataUrl: preview.imageDataUrl,
       imageEngine: preview.imageEngine,
       page: preview.page,
-      editable: false,
-      elements: [],
+      editable: Boolean(preview.editable),
+      elements: preview.elements ?? [],
       variables: preview.variables ?? extractVariableKeys(preview.previewHtml ?? ""),
     };
   } catch (error) {
@@ -89,11 +107,193 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
   }
 }
 
+export async function extractEditableDocxElementsFromDataUrl(
+  dataUrl: string,
+  page: ExtractedDocumentPage | undefined,
+) {
+  const bytes = dataUrlToUint8Array(dataUrl);
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return extractEditableElementsSafely(arrayBuffer, page);
+}
+
 function isDocx(file: File) {
   return (
     file.type.includes("wordprocessingml") ||
     file.name.toLowerCase().endsWith(".docx")
   );
+}
+
+async function extractEditableElementsSafely(
+  arrayBuffer: ArrayBuffer,
+  page: ExtractedDocumentPage | undefined,
+) {
+  try {
+    return await renderDocxToEditableElements(arrayBuffer, page);
+  } catch (error) {
+    console.warn("Nao foi possivel converter o DOCX em elementos editaveis.", error);
+    return [] as TemplateElement[];
+  }
+}
+
+async function renderDocxToEditableElements(
+  arrayBuffer: ArrayBuffer,
+  page: ExtractedDocumentPage | undefined,
+) {
+  if (typeof document === "undefined") return [] as TemplateElement[];
+
+  const { renderAsync } = await import("docx-preview");
+  const host = document.createElement("div");
+  host.style.position = "fixed";
+  host.style.left = "-20000px";
+  host.style.top = "0";
+  host.style.width = `${page?.width ?? 1123}px`;
+  host.style.minHeight = `${page?.height ?? 794}px`;
+  host.style.pointerEvents = "none";
+  host.style.opacity = "0";
+  document.body.appendChild(host);
+
+  try {
+    await renderAsync(arrayBuffer.slice(0), host, undefined, {
+      className: "docx-editable",
+      inWrapper: false,
+      ignoreWidth: false,
+      ignoreHeight: false,
+      ignoreFonts: false,
+      breakPages: true,
+      ignoreLastRenderedPageBreak: false,
+      experimental: true,
+      useBase64URL: true,
+      renderHeaders: true,
+      renderFooters: true,
+      renderFootnotes: true,
+      renderEndnotes: true,
+    });
+    await waitForRenderedImages(host);
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+    return extractRenderedEditableElements(host, page);
+  } finally {
+    host.remove();
+  }
+}
+
+function extractRenderedEditableElements(host: HTMLElement, page: ExtractedDocumentPage | undefined) {
+  const pageElement =
+    host.querySelector<HTMLElement>("section.docx-editable") ??
+    host.querySelector<HTMLElement>("section") ??
+    host;
+  const pageRect = pageElement.getBoundingClientRect();
+  const pageWidth = Math.max(1, Math.round(page?.width ?? pageRect.width ?? 1123));
+  const elements: TemplateElement[] = [];
+
+  for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("img"))) {
+    const rect = relativeRect(graphic, pageRect);
+    if (!rect || rect.width < 6 || rect.height < 6) continue;
+
+    const content = graphic.getAttribute("src") || (graphic instanceof HTMLImageElement ? graphic.src : "");
+    if (!content) continue;
+
+    addImageElement(elements, content, rect, pageWidth);
+  }
+
+  for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("div,span"))) {
+    if (graphic.textContent?.trim()) continue;
+    const content = extractCssImageUrl(window.getComputedStyle(graphic).backgroundImage);
+    if (!content) continue;
+
+    const rect = relativeRect(graphic, pageRect);
+    if (!rect || rect.width < 6 || rect.height < 6 || rect.width > 520 || rect.height > 320) continue;
+    addImageElement(elements, content, rect, pageWidth);
+  }
+
+  for (const block of Array.from(pageElement.querySelectorAll<HTMLElement>("p,h1,h2,h3,h4,h5,h6,td,th"))) {
+    if ((block.tagName === "TD" || block.tagName === "TH") && block.querySelector("p,h1,h2,h3,h4,h5,h6")) {
+      continue;
+    }
+
+    const text = normalizeText(block.textContent ?? "");
+    if (!text) continue;
+
+    const rect = relativeRect(block, pageRect);
+    if (!rect || rect.width < 4 || rect.height < 4) continue;
+
+    const styleElement = firstTextElement(block) ?? block;
+    const blockStyle = window.getComputedStyle(block);
+    const textStyle = window.getComputedStyle(styleElement);
+    const fontSize = clamp(Math.round(parseCssPixels(textStyle.fontSize) || 14), 8, 72);
+    const x = clamp(Math.round(rect.x), 0, Math.max(0, pageWidth - 8));
+    const y = Math.max(0, Math.round(rect.y));
+    const singleVariableKey = extractSingleVariableKey(text);
+
+    elements.push({
+      id: randomId("text"),
+      type: singleVariableKey ? "variable" : "text",
+      content: text,
+      variableKey: singleVariableKey,
+      variableLabel: singleVariableKey,
+      variableRequired: true,
+      x,
+      y,
+      width: clamp(Math.round(rect.width), 24, Math.max(24, pageWidth - x)),
+      height: Math.max(Math.round(rect.height), Math.ceil(fontSize * 1.35)),
+      fontSize,
+      fontFamily: normalizeFontFamily(textStyle.fontFamily),
+      color: cssColorToHex(textStyle.color),
+      align: normalizeAlign(blockStyle.textAlign),
+      bold: isBold(textStyle.fontWeight, block.tagName),
+      italic: textStyle.fontStyle === "italic" || textStyle.fontStyle === "oblique",
+      underline: textStyle.textDecorationLine.includes("underline"),
+      lineHeight: normalizeLineHeight(textStyle.lineHeight, fontSize),
+    });
+  }
+
+  return elements.sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
+function addImageElement(
+  elements: TemplateElement[],
+  content: string,
+  rect: { x: number; y: number; width: number; height: number },
+  pageWidth: number,
+) {
+  const x = clamp(Math.round(rect.x), 0, pageWidth);
+  const y = Math.max(0, Math.round(rect.y));
+  const width = clamp(Math.round(rect.width), 8, pageWidth);
+  const height = Math.max(8, Math.round(rect.height));
+  const duplicate = elements.some((element) =>
+    element.type === "image" &&
+    element.content === content &&
+    Math.abs(element.x - x) <= 2 &&
+    Math.abs(element.y - y) <= 2 &&
+    Math.abs(element.width - width) <= 2 &&
+    Math.abs(element.height - height) <= 2,
+  );
+  if (duplicate) return;
+
+  elements.push({
+    id: randomId("image"),
+    type: "image",
+    content,
+    variableRequired: true,
+    x,
+    y,
+    width,
+    height,
+    fontSize: 12,
+    fontFamily: "Arial",
+    color: "#111827",
+    align: "center",
+    bold: false,
+    italic: false,
+    underline: false,
+    lineHeight: 1.15,
+  });
+}
+
+function extractCssImageUrl(value: string) {
+  const match = value.match(/^url\((.*)\)$/);
+  if (!match) return "";
+  return match[1].trim().replace(/^["']|["']$/g, "");
 }
 
 async function extractDocxPage(arrayBuffer: ArrayBuffer): Promise<ExtractedDocumentPage | undefined> {
@@ -187,6 +387,9 @@ export function htmlPreviewToEditableElements(html: string): TemplateElement[] {
         color: "#111827",
         align: "center",
         bold: false,
+        italic: false,
+        underline: false,
+        lineHeight: 1.15,
       });
       y += height + 18;
     }
@@ -216,6 +419,9 @@ export function htmlPreviewToEditableElements(html: string): TemplateElement[] {
       color: "#000000",
       align,
       bold,
+      italic: false,
+      underline: false,
+      lineHeight: 1.15,
     });
     y += height + 12;
   }
@@ -282,6 +488,130 @@ function readSize(element: Element, key: "width" | "height") {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function growPageToFit(page: ExtractedDocumentPage | undefined, elements: TemplateElement[]) {
+  if (!page) return undefined;
+  const maxBottom = Math.max(0, ...elements.map((element) => element.y + element.height));
+  if (maxBottom <= page.height) return page;
+  return {
+    ...page,
+    height: Math.ceil(maxBottom + 24),
+  };
+}
+
+function relativeRect(element: Element, pageRect: DOMRect) {
+  const rect = element.getBoundingClientRect();
+  if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
+
+  return {
+    x: rect.left - pageRect.left,
+    y: rect.top - pageRect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function firstTextElement(element: Element) {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+
+  while (node) {
+    if (node.textContent?.trim()) {
+      return node.parentElement;
+    }
+    node = walker.nextNode();
+  }
+
+  return null;
+}
+
+function parseCssPixels(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeFontFamily(value: string) {
+  return value.split(",")[0]?.replaceAll('"', "").replaceAll("'", "").trim() || "Arial";
+}
+
+function normalizeAlign(value: string): "left" | "center" | "right" {
+  if (value === "center") return "center";
+  if (value === "right" || value === "end") return "right";
+  return "left";
+}
+
+function isBold(value: string, tagName: string) {
+  if (/^h[1-6]$/i.test(tagName)) return true;
+  if (value === "bold" || value === "bolder") return true;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 600;
+}
+
+function normalizeLineHeight(value: string, fontSize: number) {
+  const parsed = parseCssPixels(value);
+  if (parsed > 0 && fontSize > 0) return clamp(Math.round((parsed / fontSize) * 100) / 100, 0.8, 2.4);
+  return 1.15;
+}
+
+function cssColorToHex(value: string) {
+  const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (!match) return "#111827";
+  return `#${toHex(Number(match[1]))}${toHex(Number(match[2]))}${toHex(Number(match[3]))}`;
+}
+
+function toHex(value: number) {
+  return clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0");
+}
+
+function extractSingleVariableKey(text: string) {
+  const keys = extractVariableKeys(text);
+  return keys.length === 1 && /^\{\{\s*[^{}]+?\s*\}\}$/.test(text.trim()) ? keys[0] : undefined;
+}
+
+function randomId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Math.random().toString(36).slice(2)}`;
+}
+
+function dataUrlToUint8Array(dataUrl: string) {
+  const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+async function waitForRenderedImages(root: ParentNode) {
+  const images = Array.from(root.querySelectorAll("img"));
+  await Promise.all(
+    images.map((image) => {
+      if (image.complete && image.naturalWidth > 0) return undefined;
+
+      return new Promise<void>((resolve) => {
+        const timeoutId = window.setTimeout(resolve, 2000);
+        image.addEventListener("load", () => {
+          window.clearTimeout(timeoutId);
+          resolve();
+        }, { once: true });
+        image.addEventListener("error", () => {
+          window.clearTimeout(timeoutId);
+          resolve();
+        }, { once: true });
+      });
+    }),
+  );
+}
+
+function nextAnimationFrame() {
+  return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
 function fitElementsToPage(elements: TemplateElement[]) {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isSystemCertificateVariableKey } from "@/lib/verification-code";
 
 export const templateElementSchema = z.object({
   id: z.string(),
@@ -16,6 +17,9 @@ export const templateElementSchema = z.object({
   color: z.string().default("#111827"),
   align: z.enum(["left", "center", "right"]).default("center"),
   bold: z.boolean().default(false),
+  italic: z.boolean().default(false),
+  underline: z.boolean().default(false),
+  lineHeight: z.number().default(1.15),
 });
 
 export const templateVariableDefinitionSchema = z.object({
@@ -33,6 +37,7 @@ export const templatePageBorderSchema = z.object({
 export const templateLayoutSchema = z.object({
   elements: z.array(templateElementSchema).default([]),
   variableDefinitions: z.array(templateVariableDefinitionSchema).optional(),
+  baseDocumentMode: z.enum(["native", "editable"]).optional(),
   baseFileName: z.string().optional(),
   baseFileType: z.string().optional(),
   baseFileDataUrl: z.string().optional(),
@@ -53,22 +58,27 @@ export type TemplatePageBorder = z.infer<typeof templatePageBorderSchema>;
 export function extractVariables(layout: TemplateLayout) {
   const variables = new Map<string, { label: string; required: boolean }>();
 
-  for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
-    variables.set(key, {
-      label: labelFromKey(key),
-      required: true,
-    });
-  }
+  if (shouldUseBasePreviewVariables(layout)) {
+    for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
+      if (isSystemCertificateVariableKey(key)) continue;
+      variables.set(key, {
+        label: labelFromKey(key),
+        required: true,
+      });
+    }
 
-  for (const key of extractVariableKeys(stripHtml(layout.basePreviewHtml ?? ""))) {
-    variables.set(key, {
-      label: labelFromKey(key),
-      required: true,
-    });
+    for (const key of extractVariableKeys(stripHtml(layout.basePreviewHtml ?? ""))) {
+      if (isSystemCertificateVariableKey(key)) continue;
+      variables.set(key, {
+        label: labelFromKey(key),
+        required: true,
+      });
+    }
   }
 
   for (const element of layout.elements) {
     for (const key of extractVariableKeys(element.content)) {
+      if (isSystemCertificateVariableKey(key)) continue;
       variables.set(key, {
         label: labelFromKey(key),
         required: true,
@@ -78,6 +88,7 @@ export function extractVariables(layout: TemplateLayout) {
 
   for (const definition of layout.variableDefinitions ?? []) {
     if (!definition.key) continue;
+    if (isSystemCertificateVariableKey(definition.key)) continue;
     variables.set(definition.key, {
       label: definition.label?.trim() || labelFromKey(definition.key),
       required: definition.required,
@@ -86,6 +97,7 @@ export function extractVariables(layout: TemplateLayout) {
 
   for (const element of layout.elements) {
     if (element.type === "variable" && element.variableKey) {
+      if (isSystemCertificateVariableKey(element.variableKey)) continue;
       variables.set(element.variableKey, {
         label: element.variableLabel?.trim() || labelFromKey(element.variableKey),
         required: element.variableRequired,
@@ -174,6 +186,9 @@ export function defaultLayout(): TemplateLayout {
         color: "#0f172a",
         align: "center",
         bold: true,
+        italic: false,
+        underline: false,
+        lineHeight: 1.15,
       },
       {
         id: "recipient",
@@ -191,6 +206,9 @@ export function defaultLayout(): TemplateLayout {
         color: "#111827",
         align: "center",
         bold: true,
+        italic: false,
+        underline: false,
+        lineHeight: 1.15,
       },
       {
         id: "body",
@@ -206,6 +224,9 @@ export function defaultLayout(): TemplateLayout {
         color: "#374151",
         align: "center",
         bold: false,
+        italic: false,
+        underline: false,
+        lineHeight: 1.15,
       },
       {
         id: "qr",
@@ -221,6 +242,9 @@ export function defaultLayout(): TemplateLayout {
         color: "#111827",
         align: "center",
         bold: false,
+        italic: false,
+        underline: false,
+        lineHeight: 1.15,
       },
     ],
   };
@@ -238,6 +262,7 @@ export function uploadedBaseLayout({
   imageEngine,
   elements,
   pageBorder,
+  baseDocumentMode,
 }: {
   fileName: string;
   fileType: string;
@@ -250,8 +275,10 @@ export function uploadedBaseLayout({
   imageEngine?: string;
   elements?: TemplateElement[];
   pageBorder?: TemplatePageBorder;
+  baseDocumentMode?: TemplateLayout["baseDocumentMode"];
 }): TemplateLayout {
   return {
+    baseDocumentMode,
     baseFileName: fileName,
     baseFileType: fileType,
     baseFileDataUrl: dataUrl,
@@ -269,4 +296,8 @@ export function uploadedBaseLayout({
 export function isDefaultStarterLayout(layout: TemplateLayout) {
   const ids = layout.elements.map((element) => element.id).sort();
   return ids.join(",") === "body,qr,recipient,title";
+}
+
+export function shouldUseBasePreviewVariables(layout: TemplateLayout) {
+  return layout.baseDocumentMode !== "editable";
 }

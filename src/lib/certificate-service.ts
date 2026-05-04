@@ -1,4 +1,4 @@
-import { nanoid } from "nanoid";
+import { buildDefaultCertificateDeleteAt } from "@/lib/certificate-validity";
 import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
 import {
@@ -8,6 +8,12 @@ import {
   type RenderInput,
 } from "@/lib/render-certificate";
 import { deleteCertificateFiles, uploadCertificateFile } from "@/lib/supabase";
+import {
+  buildVerificationTemplateValues,
+  generateNextVerificationCode,
+  isSystemCertificateVariableKey,
+  VERIFICATION_CODE_PREFIX,
+} from "@/lib/verification-code";
 
 export async function issueCertificate({
   templateId,
@@ -35,14 +41,24 @@ export async function issueCertificate({
   const securedValues = applyIssuerRestrictions(values, template.variables, issuedBy);
 
   for (const variable of template.variables) {
+    if (isSystemCertificateVariableKey(variable.key)) continue;
+
     if (variable.required && !String(securedValues[variable.key] ?? "").trim()) {
       throw new Error(`Variável obrigatória ausente: ${variable.label}`);
     }
   }
 
-  const verificationCode = nanoid(12).toUpperCase();
+  const issuedAt = new Date();
+  const verificationCode = await generateNextVerificationCode(async () => {
+    const existingIssues = await prisma.certificateIssue.findMany({
+      where: { verificationCode: { startsWith: `${VERIFICATION_CODE_PREFIX}-` } },
+      select: { verificationCode: true },
+    });
+    return existingIssues.map((issue) => issue.verificationCode);
+  }, issuedAt);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const normalizedValues = normalizeIssueValues(normalizeDateValues(securedValues, template.variables));
+  const issueValues = { ...securedValues, ...buildVerificationTemplateValues(verificationCode) };
+  const normalizedValues = normalizeIssueValues(normalizeDateValues(issueValues, template.variables));
   const recipientName = findValue(normalizedValues, ["nome", "name", "participante", "aluno", "titular"]) || "Sem nome";
   const recipientEmail = findValue(normalizedValues, ["email", "e_mail"]) || undefined;
   const recipientDocument = findDocumentValue(normalizedValues);
@@ -75,7 +91,8 @@ export async function issueCertificate({
     data: {
       verificationCode,
       values: normalizedValues.original,
-      deleteAt: buildDefaultCertificateDeleteAt(),
+      issuedAt,
+      deleteAt: buildDefaultCertificateDeleteAt(issuedAt),
       template: { connect: { id: templateId } },
       issuedBy: { connect: { id: issuedById } },
       ...(batchId ? { batch: { connect: { id: batchId } } } : {}),
@@ -109,39 +126,53 @@ export async function issueCertificate({
   });
 }
 
-export async function deleteCertificateIssue(id: string) {
-  return (await deleteCertificateIssues([id])) > 0;
+export async function renderCertificatePreviewPdf({
+  templateId,
+  values,
+  issuedById,
+}: {
+  templateId: string;
+  values: Record<string, string>;
+  issuedById: string;
+}) {
+  const template = await prisma.certificateTemplate.findUnique({
+    where: { id: templateId },
+    include: { variables: true },
+  });
+  if (!template) throw new Error("Modelo não encontrado.");
+
+  const issuedBy = await prisma.user.findUnique({
+    where: { id: issuedById },
+    select: { id: true, name: true, email: true, role: true },
+  });
+  if (!issuedBy) throw new Error("Usuário emissor não encontrado.");
+
+  const securedValues = applyIssuerRestrictions(values, template.variables, issuedBy);
+
+  for (const variable of template.variables) {
+    if (isSystemCertificateVariableKey(variable.key)) continue;
+
+    if (variable.required && !String(securedValues[variable.key] ?? "").trim()) {
+      throw new Error(`Variável obrigatória ausente: ${variable.label}`);
+    }
+  }
+
+  const normalizedValues = normalizeIssueValues(normalizeDateValues(securedValues, template.variables));
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  const previewCode = "PREVIA";
+  const pdf = await renderPdfBufferSafely({
+    template,
+    values: normalizedValues.original,
+    verificationCode: previewCode,
+    appUrl,
+  });
+
+  if (!pdf) throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
+  return pdf;
 }
 
-export async function deleteCertificateIssues(ids: string[]) {
-  const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
-  if (!uniqueIds.length) return 0;
-
-  const issues = await prisma.certificateIssue.findMany({
-    where: { id: { in: uniqueIds } },
-    select: {
-      id: true,
-      recipientId: true,
-      files: { select: { storagePath: true } },
-    },
-  });
-
-  if (!issues.length) return 0;
-
-  await prisma.certificateIssue.deleteMany({
-    where: { id: { in: issues.map((issue) => issue.id) } },
-  });
-
-  const recipientIds = Array.from(new Set(issues.map((issue) => issue.recipientId)));
-  await prisma.certificateRecipient.deleteMany({
-    where: {
-      id: { in: recipientIds },
-      issues: { none: {} },
-    },
-  });
-
-  await removeStoredFiles(issues.flatMap((issue) => issue.files.map((file) => file.storagePath).filter(Boolean) as string[]));
-  return issues.length;
+export async function expireCertificateDocuments(ids: string[], now = new Date()) {
+  return expireCertificateDocumentFiles(ids, { deleteAt: now });
 }
 
 async function renderPdfBufferSafely(input: RenderInput) {
@@ -171,7 +202,7 @@ async function uploadCertificateFileSafely(input: {
   }
 }
 
-export async function deleteExpiredCertificateIssues(now = new Date()) {
+export async function expireScheduledCertificateDocuments(now = new Date()) {
   const issues = await prisma.certificateIssue.findMany({
     where: {
       deleteAt: { lte: now },
@@ -179,7 +210,44 @@ export async function deleteExpiredCertificateIssues(now = new Date()) {
     select: { id: true },
   });
 
-  return deleteCertificateIssues(issues.map((issue) => issue.id));
+  return expireCertificateDocumentFiles(issues.map((issue) => issue.id));
+}
+
+async function expireCertificateDocumentFiles(
+  ids: string[],
+  options: { deleteAt?: Date } = {},
+) {
+  const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return 0;
+
+  const issues = await prisma.certificateIssue.findMany({
+    where: { id: { in: uniqueIds } },
+    select: {
+      id: true,
+      files: { select: { storagePath: true } },
+    },
+  });
+
+  if (!issues.length) return 0;
+
+  await removeStoredFiles(issues.flatMap((issue) => issue.files.map((file) => file.storagePath).filter(Boolean) as string[]));
+
+  await prisma.generatedFile.updateMany({
+    where: { issueId: { in: issues.map((issue) => issue.id) } },
+    data: {
+      content: null,
+      storagePath: null,
+    },
+  });
+
+  if (options.deleteAt) {
+    await prisma.certificateIssue.updateMany({
+      where: { id: { in: issues.map((issue) => issue.id) } },
+      data: { deleteAt: options.deleteAt },
+    });
+  }
+
+  return issues.length;
 }
 
 async function removeStoredFiles(storagePaths: string[]) {
@@ -235,15 +303,6 @@ function applyIssuerRestrictions(
   }
 
   return secured;
-}
-
-function buildDefaultCertificateDeleteAt() {
-  const retentionDays = Number.parseInt(process.env.CERTIFICATE_RETENTION_DAYS ?? "365", 10);
-  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return null;
-
-  const date = new Date();
-  date.setDate(date.getDate() + retentionDays);
-  return date;
 }
 
 function normalizeDateValues(

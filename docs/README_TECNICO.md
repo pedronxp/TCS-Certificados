@@ -64,6 +64,7 @@ Usuário autenticado
 | `mammoth` | Extração de conteúdo de DOCX para preview. |
 | `csv-parse` + `xlsx` | Leitura de CSV/XLSX em lote. |
 | Playwright | Suporte para renderização quando o Chromium está instalado. |
+| Microsoft Graph / CloudConvert / Gotenberg / LibreOffice | Conversão DOCX para PDF no preview e na emissão. |
 
 ## Estrutura de Pastas
 
@@ -206,7 +207,7 @@ O DOCX pode conter placeholders como:
 {{curso}}
 ```
 
-Quando esses placeholders existem, o sistema consegue detectá-los e usá-los como variáveis do formulário.
+Quando esses placeholders existem, o sistema consegue detectá-los e usá-los como variáveis do formulário. Se houver Microsoft Graph ou CloudConvert configurado, o editor preserva o DOCX como base visual convertida em PDF, sem depender de Docker.
 
 ### Imagem
 
@@ -230,9 +231,10 @@ Fluxo:
 3. Operador preenche os dados do titular.
 4. API chama `issueCertificate`.
 5. O serviço cria ou reutiliza `CertificateRecipient`.
-6. O serviço cria `CertificateIssue` com código único.
+6. O serviço cria `CertificateIssue` com código único no padrão `TCS-BR-ANO-0001`, usando numeração global do sistema.
 7. O sistema gera PDF/DOCX.
-8. Os arquivos ficam vinculados em `GeneratedFile`.
+8. Se o modelo tiver `{{COD}}`, o render substitui pelo número global, como `0001`.
+9. Os arquivos ficam vinculados em `GeneratedFile`.
 
 ## Emissão em Lote
 
@@ -328,6 +330,8 @@ src/lib/certificate-layout.ts
 O PDF é a saída principal, adequada para preservação visual.
 
 Quando há base PDF, o sistema usa o documento original como fundo. Textos variáveis e QR Code são sobrepostos com base nas posições configuradas no editor.
+
+Quando a base original é DOCX, a conversão para PDF tenta, nesta ordem: Microsoft Graph, CloudConvert, Gotenberg e LibreOffice local.
 
 ### DOCX
 

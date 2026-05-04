@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { TemplateVariable } from "@prisma/client";
-import { BadgeCheck, LoaderCircle } from "lucide-react";
+import { BadgeCheck, Eye, LoaderCircle, X } from "lucide-react";
 import { formatDateLongPtBr, isDateField, isLongDateField } from "@/lib/date-fields";
 
 type FormMessage = {
@@ -34,6 +34,9 @@ export function IssueForm({
   const [dateIsoValues, setDateIsoValues] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<FormMessage | null>(null);
   const [loading, setLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId),
@@ -59,20 +62,31 @@ export function IssueForm({
   const canSubmit =
     Boolean(templateId) &&
     !loading &&
+    !previewLoading &&
     missingRequiredVariables.length === 0 &&
     invalidDocumentVariables.length === 0;
+  const canPreview =
+    Boolean(templateId) &&
+    !loading &&
+    !previewLoading &&
+    missingRequiredVariables.length === 0 &&
+    invalidDocumentVariables.length === 0;
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => window.URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
   function updateTemplate(nextTemplateId: string) {
     setTemplateId(nextTemplateId);
     setMessage(null);
+    setPreviewOpen(false);
   }
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  function validateReady() {
     if (!selectedTemplate) {
       setMessage({ type: "error", text: "Selecione um modelo para emitir o certificado." });
-      return;
+      return false;
     }
 
     if (missingRequiredVariables.length) {
@@ -80,7 +94,7 @@ export function IssueForm({
         type: "error",
         text: `Preencha: ${missingRequiredVariables.map(getFieldLabel).join(", ")}.`,
       });
-      return;
+      return false;
     }
 
     if (invalidDocumentVariables.length) {
@@ -88,12 +102,54 @@ export function IssueForm({
         type: "error",
         text: `Confira o documento: ${invalidDocumentVariables.map(getFieldLabel).join(", ")}.`,
       });
-      return;
+      return false;
     }
 
-    const payloadValues = Object.fromEntries(
+    return true;
+  }
+
+  function buildPayloadValues() {
+    return Object.fromEntries(
       variables.map((variable) => [variable.key, effectiveValues[variable.key]?.trim() ?? ""]),
     );
+  }
+
+  async function openPreview() {
+    if (!validateReady()) return;
+
+    setPreviewLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/certificates/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId, values: buildPayloadValues() }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        setMessage({
+          type: "error",
+          text: result?.error ?? "Não foi possível gerar a prévia.",
+        });
+        return;
+      }
+
+      const blob = await response.blob();
+      setPreviewUrl(window.URL.createObjectURL(blob));
+      setPreviewOpen(true);
+    } catch {
+      setMessage({ type: "error", text: "Não foi possível conectar ao servidor." });
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!validateReady()) return;
 
     setLoading(true);
     setMessage(null);
@@ -102,7 +158,7 @@ export function IssueForm({
       const response = await fetch("/api/certificates/issue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId, values: payloadValues }),
+        body: JSON.stringify({ templateId, values: buildPayloadValues() }),
       });
 
       if (!response.ok) {
@@ -192,14 +248,67 @@ export function IssueForm({
             ? `${missingRequiredVariables.length} campo(s) obrigatório(s) pendente(s)`
             : "Campos obrigatórios preenchidos"}
         </p>
-        <button
-          disabled={!canSubmit}
-          className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
-          {loading ? "Gerando" : "Gerar PDF e DOCX"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!canPreview}
+            onClick={openPreview}
+            className="inline-flex items-center gap-2 rounded-md border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {previewLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Eye className="size-4" />}
+            {previewLoading ? "Gerando prévia" : "Ver prévia"}
+          </button>
+          <button
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
+            {loading ? "Gerando" : "Gerar PDF e DOCX"}
+          </button>
+        </div>
       </div>
+
+      {previewOpen && previewUrl ? (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 p-4 backdrop-blur-sm">
+          <div className="mx-auto flex h-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Prévia do certificado</h2>
+                <p className="text-xs font-medium text-slate-500">Confira o layout antes de gerar os arquivos.</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setPreviewOpen(false)}
+                title="Fechar prévia"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <iframe
+              title="Prévia do certificado"
+              src={previewUrl}
+              className="min-h-0 flex-1 bg-slate-100"
+            />
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Voltar e ajustar
+              </button>
+              <button
+                disabled={!canSubmit}
+                className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
+                {loading ? "Gerando" : "Gerar PDF e DOCX"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </form>
   );
 }

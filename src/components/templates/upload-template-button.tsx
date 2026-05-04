@@ -27,18 +27,20 @@ export function UploadTemplateButton() {
       const fileType = file.type || guessFileType(file.name);
       const extracted = await extractDocumentPreview(file);
       const pagePreset = extracted.page ?? { width: 1123, height: 794, orientation: "landscape" };
+      const isEditableDocx = fileType.includes("wordprocessingml") && extracted.editable && extracted.elements.length > 0;
       const layout = uploadedBaseLayout({
         fileName: file.name,
         fileType,
         dataUrl,
         previewHtml: extracted.previewHtml,
-        renderDataUrl: extracted.renderDataUrl,
-        renderFileType: extracted.renderFileType,
-        renderEngine: extracted.renderEngine,
-        imageDataUrl: extracted.imageDataUrl,
-        imageEngine: extracted.imageEngine,
+        renderDataUrl: isEditableDocx ? undefined : extracted.renderDataUrl,
+        renderFileType: isEditableDocx ? undefined : extracted.renderFileType,
+        renderEngine: isEditableDocx ? undefined : extracted.renderEngine,
+        imageDataUrl: isEditableDocx ? undefined : extracted.imageDataUrl,
+        imageEngine: isEditableDocx ? undefined : extracted.imageEngine,
         elements: extracted.elements,
         pageBorder: extracted.page?.border,
+        baseDocumentMode: isEditableDocx ? "editable" : "native",
       });
       const draft: TemplateImportDraft = {
         name: file.name.replace(/\.[^.]+$/, ""),

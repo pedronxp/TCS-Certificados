@@ -3,8 +3,10 @@ import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import type { CertificateStatus, Prisma } from "@prisma/client";
 import { HistoryTable, type HistoryIssue } from "@/components/certificates/history-table";
 import { requireUser } from "@/lib/auth";
-import { deleteExpiredCertificateIssues } from "@/lib/certificate-service";
+import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
+import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
+import { normalizeVerificationCode } from "@/lib/verification-code";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +18,7 @@ type HistorySearchParams = Promise<{
   company?: string | string[];
   status?: string | string[];
   visibility?: string | string[];
+  availability?: string | string[];
   from?: string | string[];
   to?: string | string[];
   page?: string | string[];
@@ -27,14 +30,15 @@ export default async function CertificateHistoryPage({
   searchParams: HistorySearchParams;
 }) {
   const user = await requireUser();
-  await deleteExpiredCertificateIssues().catch((error) => {
+  const now = new Date();
+  await expireScheduledCertificateDocuments(now).catch((error) => {
     console.error("Falha ao limpar certificados com prazo vencido", error);
   });
 
   const params = await searchParams;
   const filters = parseFilters(params);
   const canManage = user.role === "ADMIN";
-  const where = buildWhere(filters, { canManage, userId: user.id });
+  const where = buildWhere(filters, { canManage, userId: user.id, now });
 
   const rows = await prisma.certificateIssue.findMany({
     where,
@@ -71,21 +75,27 @@ export default async function CertificateHistoryPage({
   });
 
   const hasNextPage = rows.length > pageSize;
-  const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => ({
-    id: issue.id,
-    verificationCode: issue.verificationCode,
-    status: issue.status,
-    issuedAt: issue.issuedAt.toISOString(),
-    revokedAt: issue.revokedAt?.toISOString() ?? null,
-    deleteAt: toDateInputValue(issue.deleteAt),
-    hiddenAt: issue.hiddenAt?.toISOString() ?? null,
-    recipientName: issue.recipient.name,
-    recipientEmail: issue.recipient.email,
-    recipientDocument: issue.recipient.document,
-    company: getCompanyName(issue.values),
-    templateName: issue.template.name,
-    issuedByName: issue.issuedBy.name,
-  }));
+  const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => {
+    const documentExpired = isCertificateDocumentExpired(issue.deleteAt, now);
+
+    return {
+      id: issue.id,
+      verificationCode: issue.verificationCode,
+      status: issue.status,
+      issuedAt: issue.issuedAt.toISOString(),
+      revokedAt: issue.revokedAt?.toISOString() ?? null,
+      deleteAt: toDateInputValue(issue.deleteAt),
+      hiddenAt: issue.hiddenAt?.toISOString() ?? null,
+      documentExpired,
+      documentAvailable: !documentExpired,
+      recipientName: issue.recipient.name,
+      recipientEmail: issue.recipient.email,
+      recipientDocument: issue.recipient.document,
+      company: getCompanyName(issue.values),
+      templateName: issue.template.name,
+      issuedByName: issue.issuedBy.name,
+    };
+  });
   const start = issues.length ? (filters.page - 1) * pageSize + 1 : 0;
   const end = start + issues.length - 1;
 
@@ -150,10 +160,10 @@ export default async function CertificateHistoryPage({
 
         <details
           className="filter-advanced"
-          open={canManage ? filters.visibility !== "visible" || Boolean(filters.from || filters.to) : Boolean(filters.from || filters.to)}
+          open={canManage ? filters.visibility !== "visible" || filters.availability !== "all" || Boolean(filters.from || filters.to) : filters.availability !== "all" || Boolean(filters.from || filters.to)}
           style={{ gridColumn: "span 9" }}
         >
-          <summary>{canManage ? "Visibilidade e período" : "Período"}</summary>
+          <summary>{canManage ? "Visibilidade, documentos e periodo" : "Documentos e periodo"}</summary>
           <div className="filter-advanced-grid">
             {canManage ? (
               <label className="field">
@@ -165,6 +175,16 @@ export default async function CertificateHistoryPage({
                 </select>
               </label>
             ) : null}
+
+            <label className="field">
+              <span className="field-label">Documentos</span>
+              <select name="availability" defaultValue={filters.availability}>
+                <option value="all">Todos</option>
+                <option value="available">Disponiveis</option>
+                <option value="scheduled">Programados</option>
+                <option value="expired">Expirados</option>
+              </select>
+            </label>
 
             <label className="field">
               <span className="field-label">De</span>
@@ -231,6 +251,7 @@ export default async function CertificateHistoryPage({
 function parseFilters(params: Awaited<HistorySearchParams>) {
   const status = firstParam(params.status);
   const visibility = parseVisibility(firstParam(params.visibility));
+  const availability = parseAvailability(firstParam(params.availability));
   const page = Number.parseInt(firstParam(params.page) || "1", 10);
 
   return {
@@ -238,6 +259,7 @@ function parseFilters(params: Awaited<HistorySearchParams>) {
     company: firstParam(params.company).trim(),
     status: certificateStatuses.includes(status as CertificateStatus) ? (status as CertificateStatus) : undefined,
     visibility,
+    availability,
     from: normalizeDateInput(firstParam(params.from)),
     to: normalizeDateInput(firstParam(params.to)),
     page: Number.isFinite(page) && page > 0 ? page : 1,
@@ -246,7 +268,7 @@ function parseFilters(params: Awaited<HistorySearchParams>) {
 
 function buildWhere(
   filters: ReturnType<typeof parseFilters>,
-  scope: { canManage: boolean; userId: string },
+  scope: { canManage: boolean; userId: string; now: Date },
 ): Prisma.CertificateIssueWhereInput {
   const and: Prisma.CertificateIssueWhereInput[] = [];
 
@@ -255,9 +277,18 @@ function buildWhere(
   }
 
   if (filters.q) {
+    const normalizedCode = normalizeVerificationCode(filters.q);
+    const verificationCodeFilters: Prisma.CertificateIssueWhereInput[] = [
+      { verificationCode: { contains: filters.q, mode: "insensitive" } },
+    ];
+
+    if (normalizedCode && normalizedCode !== filters.q) {
+      verificationCodeFilters.push({ verificationCode: { contains: normalizedCode, mode: "insensitive" } });
+    }
+
     and.push({
       OR: [
-        { verificationCode: { contains: filters.q, mode: "insensitive" } },
+        ...verificationCodeFilters,
         {
           recipient: {
             is: {
@@ -317,6 +348,23 @@ function buildWhere(
     and.push({ hiddenAt: { not: null } });
   }
 
+  if (filters.availability === "available") {
+    and.push({
+      OR: [
+        { deleteAt: null },
+        { deleteAt: { gt: scope.now } },
+      ],
+    });
+  }
+
+  if (filters.availability === "scheduled") {
+    and.push({ deleteAt: { gt: scope.now } });
+  }
+
+  if (filters.availability === "expired") {
+    and.push({ deleteAt: { lte: scope.now } });
+  }
+
   if (filters.from || filters.to) {
     and.push({
       issuedAt: {
@@ -354,8 +402,12 @@ function parseVisibility(value: string) {
   return value === "hidden" || value === "all" ? value : "visible";
 }
 
+function parseAvailability(value: string) {
+  return value === "available" || value === "scheduled" || value === "expired" ? value : "all";
+}
+
 function toDateInputValue(value: Date | null) {
-  return value ? value.toISOString().slice(0, 10) : "";
+  return value ? value.toISOString().slice(0, 10) : null;
 }
 
 function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
@@ -365,6 +417,7 @@ function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
   if (filters.company) params.set("company", filters.company);
   if (filters.status) params.set("status", filters.status);
   if (filters.visibility !== "visible") params.set("visibility", filters.visibility);
+  if (filters.availability !== "all") params.set("availability", filters.availability);
   if (filters.from) params.set("from", filters.from);
   if (filters.to) params.set("to", filters.to);
   if (page > 1) params.set("page", String(page));

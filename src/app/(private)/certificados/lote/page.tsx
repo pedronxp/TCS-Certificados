@@ -1,6 +1,9 @@
 import { BatchForm } from "@/components/certificates/batch-form";
 import { requireAdmin } from "@/lib/auth";
+import { failStaleBatchJobs } from "@/lib/batch-jobs";
+import { BATCH_STATUS_LABELS } from "@/lib/batch-status";
 import { prisma } from "@/lib/prisma";
+import type { CertificateBatchStatus } from "@prisma/client";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = { title: "Emissão em Lote — TCS Certificados" };
@@ -13,15 +16,18 @@ function formatDateTime(value: Date) {
   }).format(value);
 }
 
-const BATCH_STATUS: Record<string, { label: string; cls: string }> = {
-  PENDING:    { label: "Pendente",    cls: "chip chip-warning" },
-  PROCESSING: { label: "Processando", cls: "chip chip-brand" },
-  DONE:       { label: "Concluído",   cls: "chip chip-success" },
-  FAILED:     { label: "Falha",       cls: "chip chip-danger" },
+const BATCH_STATUS: Record<CertificateBatchStatus, { label: string; cls: string }> = {
+  RUNNING: { label: BATCH_STATUS_LABELS.RUNNING, cls: "chip chip-brand" },
+  COMPLETED: { label: BATCH_STATUS_LABELS.COMPLETED, cls: "chip chip-success" },
+  FAILED: { label: BATCH_STATUS_LABELS.FAILED, cls: "chip chip-danger" },
 };
 
 export default async function BatchCertificatePage() {
   await requireAdmin();
+  await failStaleBatchJobs().catch((error) => {
+    console.error("Falha ao encerrar lotes interrompidos", error);
+  });
+
   const [templates, batches] = await Promise.all([
     prisma.certificateTemplate.findMany({
       select: {

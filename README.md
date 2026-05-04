@@ -112,7 +112,7 @@ O usuário comum tem acesso reduzido:
 
 ### 4. Validação pública
 
-1. Cada certificado recebe um `verificationCode`.
+1. Cada certificado recebe um `verificationCode` sequencial no padrao `TCS-BR-ANO-0001`.
 2. O certificado renderizado inclui código e QR Code.
 3. A URL pública segue o formato `/validar/[codigo]`.
 4. A página pública mostra se o certificado é válido ou revogado.
@@ -123,9 +123,11 @@ O usuário comum tem acesso reduzido:
 
 Sim. Cada certificado emitido recebe um código único de validação. A rota pública `/validar/[codigo]` permite consultar a autenticidade sem login.
 
+Modelos que tiverem a variável `{{COD}}` recebem automaticamente a numeração global do sistema, como `0001`, `0002`, `0003`. Esse campo não deve ser preenchido pelo operador.
+
 ### Tempo de permanência
 
-Por padrão, certificados ficam no sistema por **365 dias**, configurado pela variável `CERTIFICATE_RETENTION_DAYS`.
+Por padrão, certificados ficam válidos no sistema por **2 anos**, configurado pela variável `CERTIFICATE_VALIDITY_YEARS`.
 
 O administrador também pode programar exclusão usando `deleteAt`. Certificados com exclusão programada podem ser removidos por rotina de limpeza.
 
@@ -150,7 +152,7 @@ Não há integração direta com WhatsApp Business API, Twilio ou Z-API. O siste
 - `bcryptjs` para hash de senha.
 - `docx`, `docxtemplater`, `pizzip`, `mammoth`, `pdf-lib` e `qrcode` para documentos.
 - `csv-parse` e `xlsx` para importação.
-- Gotenberg/LibreOffice para conversão DOCX para PDF.
+- Microsoft Graph, CloudConvert, Gotenberg ou LibreOffice para conversão DOCX para PDF.
 - Playwright para suporte de renderização e verificações visuais.
 
 ## Pré-requisitos
@@ -159,7 +161,7 @@ Instale antes de rodar o projeto:
 
 - Node.js compatível com o projeto.
 - npm.
-- Docker e Docker Compose.
+- Docker e Docker Compose, se for usar PostgreSQL/Gotenberg locais.
 - Git.
 
 Recomendado para desenvolvimento:
@@ -204,13 +206,13 @@ Copy-Item .env.example .env
 docker compose up -d
 ```
 
-Esse comando sobe:
+Esse comando sobe os serviços locais opcionais:
 
 - PostgreSQL 16 em `localhost:5432`;
 - banco `tcs_certificados`;
 - usuário `postgres`;
 - senha `postgres`;
-- Gotenberg em `localhost:3010` para conversão DOCX/PDF.
+- Gotenberg em `localhost:3010` para conversão DOCX/PDF, caso você não configure uma API externa.
 
 ### 5. Gere o Prisma Client
 
@@ -304,6 +306,40 @@ SUPABASE_CERTIFICATE_BUCKET="certificados"
 
 Para ambientes com Supabase e Prisma, prefira a connection string recomendada pelo painel do Supabase. Em alguns cenários, a URL pooled na porta `6543` ajuda a evitar falhas intermitentes de conexão.
 
+### Keepalive semanal do Supabase
+
+O projeto inclui a migration `20260503190000_add_supabase_keepalive_cron` para manter atividade periódica no banco Supabase.
+
+Ela cria:
+
+- a tabela `public.system_keepalive`;
+- a função `public.run_system_keepalive()`;
+- o job `tcs-system-keepalive-weekly` no Supabase Cron, executado toda segunda-feira às `09:00 UTC`.
+
+Para aplicar no Supabase de produção:
+
+```bash
+npx prisma migrate deploy
+```
+
+Para conferir se o job foi criado:
+
+```sql
+select jobid, jobname, schedule, active
+from cron.job
+where jobname = 'tcs-system-keepalive-weekly';
+```
+
+Para conferir a última execução registrada pela aplicação:
+
+```sql
+select last_ping_at, run_count, updated_at
+from public.system_keepalive
+where id = 1;
+```
+
+Se o banco local não tiver `pg_cron`, a migration não quebra: ela cria a tabela/função e apenas não agenda o job. No Supabase, a extensão `pg_cron` deve estar disponível pelo módulo **Integrations > Cron**.
+
 ## Variáveis de ambiente
 
 | Variável | Obrigatória | Descrição |
@@ -312,7 +348,8 @@ Para ambientes com Supabase e Prisma, prefira a connection string recomendada pe
 | `SESSION_SECRET` | Sim | Chave para assinar sessões JWT. Em produção, não pode ficar vazia nem usar o valor padrão local. |
 | `ALLOW_PUBLIC_REGISTRATION` | Não | Habilita cadastro público apenas quando definido como `true`. Padrão: desativado. |
 | `NEXT_PUBLIC_APP_URL` | Sim | URL pública usada em links e QR Codes. |
-| `CERTIFICATE_RETENTION_DAYS` | Não | Quantidade padrão de dias até `deleteAt`. Padrão do projeto: `365`. |
+| `CERTIFICATE_VALIDITY_YEARS` | Não | Quantidade padrão de anos até `deleteAt`. Padrão do projeto: `2`. |
+| `CERTIFICATE_RETENTION_DAYS` | Não | Compatibilidade com ambientes antigos: quando definida, sobrescreve a validade em anos usando dias corridos. |
 | `ADMIN_NAME` | Seed | Nome do admin criado pelo seed. |
 | `ADMIN_EMAIL` | Seed | E-mail do admin criado pelo seed. |
 | `ADMIN_PASSWORD` | Seed | Senha inicial do admin. Troque em produção. |
@@ -321,7 +358,15 @@ Para ambientes com Supabase e Prisma, prefira a connection string recomendada pe
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Opcional | Chave publishable Supabase. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Opcional | Chave server-side para gravar arquivos no Storage. |
 | `SUPABASE_CERTIFICATE_BUCKET` | Opcional | Bucket onde PDFs e DOCXs são armazenados. |
+| `MICROSOFT_GRAPH_TENANT_ID` | Opcional | Tenant Microsoft Entra usado pelo conversor Microsoft Graph. |
+| `MICROSOFT_GRAPH_CLIENT_ID` | Opcional | Application/client ID do app registrado no Microsoft Entra. |
+| `MICROSOFT_GRAPH_CLIENT_SECRET` | Opcional | Client secret server-side do app Microsoft Graph. |
+| `MICROSOFT_GRAPH_DRIVE_ID` | Opcional | Drive do OneDrive/SharePoint usado para upload temporario e conversao. |
+| `MICROSOFT_GRAPH_USER_ID` | Opcional | Usuario dono do OneDrive quando nao houver `MICROSOFT_GRAPH_DRIVE_ID`. |
+| `MICROSOFT_GRAPH_FOLDER_PATH` | Opcional | Pasta ja existente para arquivos temporarios. Padrao: raiz do drive. |
 | `GOTENBERG_URL` | Opcional | URL da API Gotenberg. Padrão local: `http://localhost:3010`. |
+| `CLOUDCONVERT_API_KEY` | Opcional | Chave server-side para converter DOCX em PDF na Vercel sem LibreOffice local. |
+| `CLOUDCONVERT_ENGINE` | Opcional | Engine usada no CloudConvert. Padrão: `libreoffice`. |
 
 ## Comandos úteis
 
@@ -405,7 +450,8 @@ docs/
 - Usuário comum visualiza apenas o próprio histórico.
 - Usuário comum não emite em lote.
 - Usuário comum não baixa arquivos emitidos por terceiros.
-- Certificados recebem `verificationCode` único.
+- Certificados recebem `verificationCode` unico no formato `TCS-BR-ANO-0001`, usando numeração global do sistema.
+- A variável `{{COD}}` é preenchida automaticamente com a parte numérica global, por exemplo `0001`.
 - Certificados revogados continuam rastreáveis.
 - `SUPABASE_SERVICE_ROLE_KEY` deve ficar apenas no servidor.
 
@@ -428,16 +474,36 @@ npm run prisma:migrate
 
 ### PDF não é gerado a partir de DOCX
 
-Confira se o Gotenberg está disponível:
+Em produção na Vercel, configure um conversor externo porque não há LibreOffice local no runtime serverless.
 
-```text
-http://localhost:3010
+Opção recomendada para Vercel:
+
+```env
+MICROSOFT_GRAPH_TENANT_ID="seu-tenant-id"
+MICROSOFT_GRAPH_CLIENT_ID="seu-client-id"
+MICROSOFT_GRAPH_CLIENT_SECRET="seu-client-secret"
+MICROSOFT_GRAPH_DRIVE_ID="drive-do-onedrive-ou-sharepoint"
 ```
 
-Se estiver usando outro serviço, configure:
+O app Microsoft precisa de permissao Microsoft Graph para ler/escrever arquivos no drive usado para conversao, como `Files.ReadWrite.All`, com consentimento administrativo.
+
+Alternativa com CloudConvert:
+
+```env
+CLOUDCONVERT_API_KEY="sua-chave-cloudconvert"
+CLOUDCONVERT_ENGINE="libreoffice"
+```
+
+Alternativa com Gotenberg hospedado fora da Vercel:
 
 ```env
 GOTENBERG_URL="https://sua-api-gotenberg"
+```
+
+No ambiente local com Docker, confira se o Gotenberg está disponível:
+
+```text
+http://localhost:3010
 ```
 
 ### QR Code aponta para URL errada
@@ -473,10 +539,11 @@ Antes de publicar:
 7. Rode migrations no banco de produção.
 8. Configure bucket privado no Supabase, se usar Storage.
 9. Restrinja acesso às chaves server-side.
-10. Configure rotina de limpeza para certificados com `deleteAt` vencido.
-11. Valide geração de PDF/DOCX no ambiente final.
-11. Rode `npm run lint`.
-12. Rode `npm run build`.
+10. Configure `MICROSOFT_GRAPH_*`, `CLOUDCONVERT_API_KEY` ou `GOTENBERG_URL` para gerar PDF a partir de DOCX na Vercel.
+11. Configure rotina de limpeza para certificados com `deleteAt` vencido.
+12. Valide geração de PDF/DOCX no ambiente final.
+13. Rode `npm run lint`.
+14. Rode `npm run build`.
 
 ## Documentação complementar
 

@@ -1,5 +1,10 @@
 import { CertificateBatchStatus } from "@prisma/client";
 import { issueCertificate } from "@/lib/certificate-service";
+import {
+  buildStaleBatchErrors,
+  isBatchJobStale,
+  STALE_BATCH_TIMEOUT_MS,
+} from "@/lib/batch-status";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
 
@@ -26,8 +31,7 @@ export async function startBatchJob({
     },
   });
 
-  void runBatchJob({ batchId: batch.id, templateId, rows, issuedById, lineOffset });
-  return batch;
+  return runBatchJob({ batchId: batch.id, templateId, rows, issuedById, lineOffset });
 }
 
 function findFirstValue(row: Record<string, string>, keys: readonly string[]) {
@@ -44,6 +48,43 @@ export async function getBatchJob(id: string, userId: string) {
     where: { id, createdById: userId },
     include: { template: { select: { name: true } } },
   });
+}
+
+export async function failStaleBatchJobs(now = new Date()) {
+  const candidates = await prisma.certificateBatch.findMany({
+    where: {
+      status: CertificateBatchStatus.RUNNING,
+      updatedAt: { lt: new Date(now.getTime() - STALE_BATCH_TIMEOUT_MS) },
+    },
+    select: {
+      id: true,
+      errors: true,
+      processed: true,
+      total: true,
+      updatedAt: true,
+    },
+  });
+
+  const staleBatches = candidates.filter((batch) => isBatchJobStale(batch.updatedAt, now));
+
+  await Promise.all(
+    staleBatches.map((batch) =>
+      prisma.certificateBatch.update({
+        where: { id: batch.id },
+        data: {
+          status: CertificateBatchStatus.FAILED,
+          errors: buildStaleBatchErrors({
+            errors: batch.errors,
+            processed: batch.processed,
+            total: batch.total,
+          }),
+          finishedAt: now,
+        },
+      }),
+    ),
+  );
+
+  return staleBatches.length;
 }
 
 async function runBatchJob({
@@ -91,7 +132,7 @@ async function runBatchJob({
     });
   } catch (error) {
     errors.push(error instanceof Error ? error.message : "Falha ao gerar lote.");
-    await prisma.certificateBatch.update({
+    return prisma.certificateBatch.update({
       where: { id: batchId },
       data: {
         status: CertificateBatchStatus.FAILED,
@@ -102,4 +143,8 @@ async function runBatchJob({
       },
     });
   }
+
+  return prisma.certificateBatch.findUniqueOrThrow({
+    where: { id: batchId },
+  });
 }

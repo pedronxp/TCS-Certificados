@@ -24,7 +24,7 @@ function initials(name: string): string {
     .join("");
 }
 
-/** Mascara código de verificação: "TCS-2025-00842" → "#TCS-2025-0••••2" */
+/** Mascara codigo de verificacao: "TCS-BR-2026-0001" -> "#TCS-BR-20••••1" */
 function maskCode(code: string): string {
   if (code.length <= 6) return "#" + code;
   const prefix = code.slice(0, Math.ceil(code.length * 0.45));
@@ -51,7 +51,7 @@ const FALLBACK_CARDS = [
     course: "Desenvolvimento Web Full Stack",
     institution: "TCS Treinamentos",
     issuedAt: "28 abr. 2025",
-    code: "#TCS-2025-0••••2",
+    code: "#TCS-BR-2026-0001",
     status: "Válido" as const,
   },
   {
@@ -61,7 +61,7 @@ const FALLBACK_CARDS = [
     course: "Excel Avançado com VBA",
     institution: "TCS Treinamentos",
     issuedAt: "25 abr. 2025",
-    code: "#TCS-2025-0••••7",
+    code: "#TCS-BR-2026-0002",
     status: "Válido" as const,
   },
   {
@@ -71,7 +71,7 @@ const FALLBACK_CARDS = [
     course: "Gestão de Projetos — PMI",
     institution: "TCS Treinamentos",
     issuedAt: "22 abr. 2025",
-    code: "#TCS-2025-0••••1",
+    code: "#TCS-BR-2026-0003",
     status: "Válido" as const,
   },
 ];

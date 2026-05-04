@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
-import { deleteExpiredCertificateIssues } from "@/lib/certificate-service";
+import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
+import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
 import {
   DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE,
@@ -9,12 +10,18 @@ import {
 } from "@/lib/render-certificate";
 import { downloadCertificateFile } from "@/lib/supabase";
 
+const PDF_CONVERTER_UNAVAILABLE_USER_MESSAGE =
+  "Não foi possível gerar o PDF deste certificado agora. Baixe o DOCX enquanto a conversão para PDF é configurada no servidor.";
+
+export const runtime = "nodejs";
+export const maxDuration = 60;
+
 export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string; type: string }> },
 ) {
   const user = await requireUser();
-  await deleteExpiredCertificateIssues().catch((error) => {
+  await expireScheduledCertificateDocuments().catch((error) => {
     console.error("Falha ao limpar certificados com prazo vencido", error);
   });
 
@@ -27,6 +34,7 @@ export async function GET(
         select: {
           recipient: { select: { name: true } },
           template: { select: { name: true } },
+          deleteAt: true,
           issuedById: true,
         },
       },
@@ -36,6 +44,15 @@ export async function GET(
   if (!file) return NextResponse.json({ error: "Arquivo não encontrado." }, { status: 404 });
   if (user.role !== "ADMIN" && file.issue.issuedById !== user.id) {
     return NextResponse.json({ error: "Arquivo não encontrado." }, { status: 404 });
+  }
+  if (isCertificateDocumentExpired(file.issue.deleteAt)) {
+    return NextResponse.json(
+      {
+        error: "Documento expirado. O codigo de validacao continua ativo, mas o arquivo nao esta mais disponivel.",
+        code: "CERTIFICATE_DOCUMENT_EXPIRED",
+      },
+      { status: 410 },
+    );
   }
   let regeneratedContent: Buffer | null;
   let regenerationError: Error | null = null;
@@ -50,15 +67,18 @@ export async function GET(
 
   const storedContent = (file.content?.length ? Buffer.from(file.content) : null)
     ?? await loadStoredFileContent(file.storagePath);
-  const content = storedContent ?? regeneratedContent;
+  const content = regeneratedContent ?? storedContent;
 
   if (!content) {
     if (regenerationError) {
       return NextResponse.json(
         {
           error: regenerationError.message === DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE
-            ? "PDF indisponivel neste ambiente. Baixe o DOCX ou configure GOTENBERG_URL com uma API de conversao externa."
+            ? PDF_CONVERTER_UNAVAILABLE_USER_MESSAGE
             : regenerationError.message,
+          code: regenerationError.message === DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE
+            ? "PDF_CONVERTER_UNAVAILABLE"
+            : "CERTIFICATE_FILE_UNAVAILABLE",
         },
         { status: 503 },
       );

@@ -13,14 +13,14 @@ afterEach(() => {
 });
 
 test("uses the development fallback outside production", () => {
-  process.env.NODE_ENV = "development";
+  setEnv("NODE_ENV", "development");
   delete process.env.SESSION_SECRET;
 
   assert.equal(getRequiredProductionSecret("SESSION_SECRET", "dev-secret-change-me"), "dev-secret-change-me");
 });
 
 test("rejects missing or default secrets in production", () => {
-  process.env.NODE_ENV = "production";
+  setEnv("NODE_ENV", "production");
   delete process.env.SESSION_SECRET;
 
   assert.throws(
@@ -49,5 +49,9 @@ function restoreEnv(name: string, value: string | undefined) {
     return;
   }
 
+  setEnv(name, value);
+}
+
+function setEnv(name: string, value: string) {
   process.env[name] = value;
 }

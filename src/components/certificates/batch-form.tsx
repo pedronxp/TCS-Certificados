@@ -8,6 +8,10 @@ import { formatDateLongPtBr, isDateField, normalizeFieldKey } from "@/lib/date-f
 type BatchResult = {
   jobId?: string;
   total?: number;
+  processed?: number;
+  created?: number;
+  status?: "running" | "completed" | "failed";
+  errors?: string[];
   error?: string;
 };
 
@@ -116,7 +120,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     }
 
     notifyBatchJobStarted(result.jobId);
-    setMessage(`Lote iniciado com ${result.total ?? validRows.length} certificados. Você pode sair desta tela.`);
+    setMessage(buildBatchMessage(result, validRows.length));
     setStep(0);
     setNamesText("");
   }
@@ -293,7 +297,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
         ) : (
           <button type="button" disabled={!canSubmit || loading} onClick={submit} className="btn btn-primary">
             {loading
-              ? <><LoaderCircle style={{ width: 15, height: 15, animation: "spin 1s linear infinite" }} /> Iniciando</>
+              ? <><LoaderCircle style={{ width: 15, height: 15, animation: "spin 1s linear infinite" }} /> Gerando</>
               : <><Upload style={{ width: 15, height: 15 }} /> Gerar certificados</>
             }
           </button>
@@ -307,6 +311,26 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
       )}
     </section>
   );
+}
+
+function buildBatchMessage(result: BatchResult, fallbackTotal: number) {
+  const total = result.total ?? fallbackTotal;
+  const created = result.created ?? 0;
+  const errors = result.errors?.length ?? 0;
+
+  if (result.status === "completed") {
+    if (errors > 0) {
+      return `Lote finalizado: ${created}/${total} gerados e ${errors} com erro.`;
+    }
+
+    return `Lote finalizado: ${created}/${total} certificados gerados.`;
+  }
+
+  if (result.status === "failed") {
+    return result.errors?.[0] ?? "Lote falhou.";
+  }
+
+  return `Lote iniciado com ${total} certificados. Voce pode sair desta tela.`;
 }
 
 function SummaryItem({ label, value }: { label: string; value: string }) {

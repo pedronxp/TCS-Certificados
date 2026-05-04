@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { parse } from "csv-parse/sync";
 import { readSheet, type CellValue } from "read-excel-file/node";
 import { requireAdmin } from "@/lib/auth";
-import { getBatchJob, startBatchJob } from "@/lib/batch-jobs";
+import { failStaleBatchJobs, getBatchJob, startBatchJob } from "@/lib/batch-jobs";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
 
@@ -41,9 +41,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: batchRuleError }, { status: 400 });
   }
 
-  const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset: hasUploadedFile ? 2 : 1 });
+  try {
+    const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset: hasUploadedFile ? 2 : 1 });
 
-  return NextResponse.json({ jobId: job.id, total: job.total, status: job.status.toLowerCase() }, { status: 202 });
+    return NextResponse.json({
+      jobId: job.id,
+      total: job.total,
+      processed: job.processed,
+      created: job.created,
+      errors: Array.isArray(job.errors) ? job.errors : [],
+      status: job.status.toLowerCase(),
+    }, { status: 201 });
+  } catch (error) {
+    console.error("Falha ao gerar lote", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Falha ao gerar lote." },
+      { status: 400 },
+    );
+  }
 }
 
 export async function GET(request: Request) {
@@ -53,6 +68,10 @@ export async function GET(request: Request) {
   if (!jobId) {
     return NextResponse.json({ error: "Informe o lote." }, { status: 400 });
   }
+
+  await failStaleBatchJobs().catch((error) => {
+    console.error("Falha ao encerrar lotes interrompidos", error);
+  });
 
   const job = await getBatchJob(jobId, user.id);
   if (!job) {
