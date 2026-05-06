@@ -306,23 +306,43 @@ SUPABASE_CERTIFICATE_BUCKET="certificados"
 
 Para ambientes com Supabase e Prisma, prefira a connection string recomendada pelo painel do Supabase. Em alguns cenários, a URL pooled na porta `6543` ajuda a evitar falhas intermitentes de conexão.
 
-### Keepalive semanal do Supabase
+### Keepalive externo do Supabase
 
-O projeto inclui a migration `20260503190000_add_supabase_keepalive_cron` para manter atividade periódica no banco Supabase.
+Projetos Supabase Free podem pausar por inatividade. Para reduzir esse risco, o projeto inclui:
 
-Ela cria:
+- a migration `20260503190000_add_supabase_keepalive_cron`, que cria a tabela `public.system_keepalive`, a função `public.run_system_keepalive()` e um job interno no Supabase Cron;
+- a migration `20260506193000_harden_supabase_keepalive`, que permite chamar a função com a `service_role` pela API REST sem deixar a RPC aberta para uso público;
+- o script `tools/supabase-keepalive.mjs`, que chama `run_system_keepalive` pela REST API do Supabase;
+- o workflow `.github/workflows/supabase-keepalive.yml`, que roda uma chamada leve todo dia às `09:17 UTC`.
 
-- a tabela `public.system_keepalive`;
-- a função `public.run_system_keepalive()`;
-- o job `tcs-system-keepalive-weekly` no Supabase Cron, executado toda segunda-feira às `09:00 UTC`.
+O cron externo é o ponto importante: um cron dentro do próprio banco não ajuda se o projeto já estiver pausado.
 
-Para aplicar no Supabase de produção:
+Para aplicar as migrations no Supabase de produção:
 
 ```bash
 npx prisma migrate deploy
 ```
 
-Para conferir se o job foi criado:
+Para testar localmente sem chamar a API:
+
+```bash
+node tools/supabase-keepalive.mjs --dry-run
+```
+
+Para executar uma chamada real:
+
+```bash
+node tools/supabase-keepalive.mjs
+```
+
+No GitHub, configure os secrets do repositório em **Settings > Secrets and variables > Actions**:
+
+- `NEXT_PUBLIC_SUPABASE_URL`: URL do projeto, por exemplo `https://seu-projeto.supabase.co`;
+- `SUPABASE_SERVICE_ROLE_KEY`: service role key do Supabase.
+
+Depois, ative o workflow em **Actions > Supabase keepalive** e rode uma vez manualmente por **Run workflow**.
+
+Para conferir se o job interno foi criado:
 
 ```sql
 select jobid, jobname, schedule, active
@@ -357,6 +377,8 @@ Se o banco local não tiver `pg_cron`, a migration não quebra: ela cria a tabel
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Opcional | Chave pública Supabase. |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Opcional | Chave publishable Supabase. |
 | `SUPABASE_SERVICE_ROLE_KEY` | Opcional | Chave server-side para gravar arquivos no Storage. |
+| `SUPABASE_KEEPALIVE_KEY` | Opcional | Chave alternativa para `tools/supabase-keepalive.mjs`; se ausente, usa `SUPABASE_SERVICE_ROLE_KEY`. |
+| `SUPABASE_KEEPALIVE_RPC` | Opcional | Nome da RPC chamada pelo keepalive. Padrão: `run_system_keepalive`. |
 | `SUPABASE_CERTIFICATE_BUCKET` | Opcional | Bucket onde PDFs e DOCXs são armazenados. |
 | `MICROSOFT_GRAPH_TENANT_ID` | Opcional | Tenant Microsoft Entra usado pelo conversor Microsoft Graph. |
 | `MICROSOFT_GRAPH_CLIENT_ID` | Opcional | Application/client ID do app registrado no Microsoft Entra. |
