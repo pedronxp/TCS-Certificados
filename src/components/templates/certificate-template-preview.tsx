@@ -21,6 +21,13 @@ export function getTemplatePreviewImage(input: {
     if (typeof value === "string" && value.startsWith("data:image/")) return value;
   }
 
+  const pages = layoutObject?.basePages;
+  if (Array.isArray(pages)) {
+    const firstPage = pages.find((page) => page && typeof page === "object") as Record<string, unknown> | undefined;
+    const imageDataUrl = firstPage?.imageDataUrl;
+    if (typeof imageDataUrl === "string" && imageDataUrl.startsWith("data:image/")) return imageDataUrl;
+  }
+
   if (typeof input.background === "string" && input.background.startsWith("data:image/")) {
     return input.background;
   }

@@ -1,9 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, Upload } from "lucide-react";
 import { notifyBatchJobStarted } from "@/components/certificates/batch-progress-toast";
-import { formatDateLongPtBr, isDateField, normalizeFieldKey } from "@/lib/date-fields";
+import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
+import {
+  formatTemplateFieldValue,
+  getTemplateDuplicateKey,
+  getTemplateFieldMetadata,
+  getTemplateVariableDescription,
+  getTemplateVariableLabel,
+  getTemplateVariablePlaceholder,
+  isTemplateBatchPersonField,
+  isTemplateBatchSharedField,
+  isTemplateRecipientField,
+  validateTemplateFieldValue,
+} from "@/lib/template-variable-fields";
 
 type BatchResult = {
   jobId?: string;
@@ -26,16 +38,19 @@ type BatchTemplate = {
   }>;
 };
 
+type BatchVariable = BatchTemplate["variables"][number];
+
+type ParsedPerson = {
+  values: Record<string, string>;
+  extraValues: string[];
+};
+
 type PreviewRow = {
   line: number;
-  name: string;
-  document: string;
-  documentDigits: string;
+  values: Record<string, string>;
   errors: string[];
 };
 
-const recipientKeys = new Set(["nome", "name", "participante", "aluno", "titular"]);
-const companyKeys = new Set(["empresa", "company"]);
 const steps = ["Dados", "Pessoas", "Revisao"];
 
 export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
@@ -52,31 +67,61 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     () => templates.find((template) => template.id === templateId),
     [templateId, templates],
   );
-  const recipientKey =
-    selectedTemplate?.variables.find((variable) => recipientKeys.has(normalizeFieldKey(variable.key)))?.key ?? "nome";
-  const documentVariable = selectedTemplate?.variables.find((variable) => getDocumentMode(variable)) ?? null;
-  const sharedVariables =
-    selectedTemplate?.variables.filter(
-      (variable) =>
-        !recipientKeys.has(normalizeFieldKey(variable.key)) &&
-        !companyKeys.has(normalizeFieldKey(variable.key)) &&
-        !getDocumentMode(variable) &&
-        !isDateField(variable),
-    ) ?? [];
+  const variables = useMemo(() => selectedTemplate?.variables ?? [], [selectedTemplate]);
+  const personVariables = useMemo(
+    () => variables.filter(isTemplateBatchPersonField),
+    [variables],
+  );
+  const recipientVariable = personVariables.find(isTemplateRecipientField) ?? null;
+  const sharedVariables = useMemo(
+    () =>
+      variables.filter(
+        (variable) =>
+          isTemplateBatchSharedField(variable) &&
+          !isCompanyVariable(variable) &&
+          !isDateField(variable),
+      ),
+    [variables],
+  );
 
-  const people = useMemo(() => splitPeople(namesText, Boolean(documentVariable)), [namesText, documentVariable]);
+  const people = useMemo(
+    () => splitPeople(namesText, personVariables),
+    [namesText, personVariables],
+  );
   const preview = useMemo(
-    () => buildPreviewRows({ people, company, issuedDate, documentVariable }),
-    [people, company, issuedDate, documentVariable],
+    () =>
+      buildPreviewRows({
+        people,
+        personVariables,
+        company,
+        issuedDate,
+        sharedValues,
+        sharedVariables,
+      }),
+    [people, personVariables, company, issuedDate, sharedValues, sharedVariables],
   );
   const sharedMissing = sharedVariables.filter(
     (variable) => variable.required && !sharedValues[variable.key]?.trim(),
   );
+  const batchBlockReason = getBatchBlockReason(recipientVariable, personVariables);
   const validRows = preview.filter((row) => !row.errors.length);
-  const hasErrors = preview.some((row) => row.errors.length) || !company.trim() || !issuedDate.trim() || sharedMissing.length > 0;
-  const canContinueFromData = Boolean(templateId && company.trim() && issuedDate.trim() && !sharedMissing.length);
-  const canContinueFromNames = people.length > 0;
+  const hasErrors =
+    Boolean(batchBlockReason) ||
+    preview.some((row) => row.errors.length) ||
+    !company.trim() ||
+    !issuedDate.trim() ||
+    sharedMissing.length > 0;
+  const canContinueFromData = Boolean(templateId && company.trim() && issuedDate.trim() && !sharedMissing.length && !batchBlockReason);
+  const canContinueFromNames = people.length > 0 && !batchBlockReason;
   const canSubmit = !hasErrors && validRows.length > 0;
+
+  function updateTemplate(nextTemplateId: string) {
+    setTemplateId(nextTemplateId);
+    setStep(0);
+    setMessage("");
+    setNamesText("");
+    setSharedValues({});
+  }
 
   async function submit() {
     if (!canSubmit || loading) return;
@@ -86,16 +131,12 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     form.set("templateId", templateId);
     form.set("empresa", company.trim());
     form.set("data", formattedIssuedDate);
-    form.set("recipientKey", recipientKey);
-    form.set("names", preview.map((row) => row.name).join("\n"));
+    form.set("recipientKey", recipientVariable?.key ?? "nome");
+    form.set("personKeys", JSON.stringify(personVariables.map((variable) => variable.key)));
+    form.set("peopleRows", JSON.stringify(preview.map((row) => row.values)));
 
-    if (documentVariable) {
-      form.set("documentKey", documentVariable.key);
-      form.set("documents", preview.map((row) => row.document).join("\n"));
-    }
-
-    for (const variable of selectedTemplate?.variables ?? []) {
-      if (companyKeys.has(normalizeFieldKey(variable.key))) {
+    for (const variable of variables) {
+      if (isCompanyVariable(variable)) {
         form.set(`values.${variable.key}`, company.trim());
       }
 
@@ -127,7 +168,6 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
 
   return (
     <section className="dark-card-flat" style={{ padding: "1.25rem" }}>
-      {/* Step tabs */}
       <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(3, 1fr)" }}>
         {steps.map((label, index) => (
           <button
@@ -178,52 +218,62 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
             <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
               <label className="field">
                 <span className="field-label">Modelo</span>
-                <select value={templateId} required onChange={(e) => setTemplateId(e.target.value)}>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>{t.name}</option>
+                <select value={templateId} required onChange={(event) => updateTemplate(event.target.value)}>
+                  {templates.map((template) => (
+                    <option key={template.id} value={template.id}>{template.name}</option>
                   ))}
                 </select>
               </label>
               <label className="field">
                 <span className="field-label">Empresa</span>
-                <input value={company} required onChange={(e) => setCompany(e.target.value)} />
+                <small style={hintStyle}>Empresa vinculada ao lote; este valor sera repetido em todos os certificados.</small>
+                <input value={company} required onChange={(event) => setCompany(event.target.value)} />
               </label>
               <label className="field">
                 <span className="field-label">Data</span>
-                <input type="date" value={issuedDate} required onChange={(e) => setIssuedDate(e.target.value)} />
+                <small style={hintStyle}>Data exibida no certificado; o sistema gravara o texto por extenso.</small>
+                <input type="date" value={issuedDate} required onChange={(event) => setIssuedDate(event.target.value)} />
               </label>
               {sharedVariables.map((variable) => (
                 <label key={variable.id} className="field">
-                  <span className="field-label">{variable.label}</span>
+                  <span className="field-label">{getFieldLabel(variable)}</span>
+                  <small style={hintStyle}>{getTemplateVariableDescription(variable)}</small>
                   <input
                     value={sharedValues[variable.key] ?? ""}
                     required={variable.required}
-                    placeholder={`{{${variable.key}}}`}
-                    onChange={(e) => setSharedValues((cur) => ({ ...cur, [variable.key]: e.target.value }))}
+                    placeholder={getTemplateVariablePlaceholder(variable)}
+                    onChange={(event) =>
+                      setSharedValues((current) => ({
+                        ...current,
+                        [variable.key]: event.target.value,
+                      }))
+                    }
                   />
                 </label>
               ))}
             </div>
-            {sharedMissing.length > 0 && (
-              <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "#d97706" }}>
-                Preencha: {sharedMissing.map((v) => v.label).join(", ")}.
-              </p>
-            )}
+            {batchBlockReason ? <WarningMessage>{batchBlockReason}</WarningMessage> : null}
+            {sharedMissing.length > 0 ? (
+              <WarningMessage>Preencha: {sharedMissing.map(getFieldLabel).join(", ")}.</WarningMessage>
+            ) : null}
           </div>
         )}
 
         {step === 1 && (
           <label className="field">
-            <span className="field-label">
-              {documentVariable ? `Pessoas (${getPersonInputLabel(documentVariable)})` : "Nomes"}
-            </span>
+            <span className="field-label">Pessoas ({getPersonInputLabel(personVariables)})</span>
+            <small style={hintStyle}>
+              Informe uma pessoa por linha, separando os campos por ponto e virgula na ordem indicada.
+            </small>
             <textarea
               value={namesText}
-              onChange={(e) => setNamesText(e.target.value)}
+              onChange={(event) => setNamesText(event.target.value)}
               rows={10}
-              placeholder={documentVariable ? "Nome; CPF\nMaria Silva; 123.456.789-00" : "Cole um nome por linha\nMaria Silva\nJoao Santos"}
+              placeholder={buildPeoplePlaceholder(personVariables)}
             />
-            <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>{people.length} pessoas informadas</span>
+            <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+              {people.length} pessoas informadas
+            </span>
           </label>
         )}
 
@@ -232,16 +282,17 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
             <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))" }}>
               <SummaryItem label="Modelo" value={selectedTemplate?.name ?? "-"} />
               <SummaryItem label="Empresa" value={company || "-"} />
-              <SummaryItem label="Data" value={issuedDate || "-"} />
-              <SummaryItem label="Válidos" value={`${validRows.length}/${preview.length}`} />
+              <SummaryItem label="Data" value={issuedDate ? formatDateLongPtBr(issuedDate) : "-"} />
+              <SummaryItem label="Validos" value={`${validRows.length}/${preview.length}`} />
             </div>
             <div className="dark-card-flat table-scroll" style={{ marginTop: "1.25rem" }}>
-              <table className="dark-table" style={{ minWidth: 600 }}>
+              <table className="dark-table" style={{ minWidth: Math.max(680, 220 + personVariables.length * 140) }}>
                 <thead>
                   <tr>
                     <th>Linha</th>
-                    <th>Nome</th>
-                    {documentVariable && <th>{getFieldLabel(documentVariable)}</th>}
+                    {personVariables.map((variable) => (
+                      <th key={variable.key}>{getFieldLabel(variable)}</th>
+                    ))}
                     <th>Empresa</th>
                     <th>Data</th>
                     <th>Status</th>
@@ -249,12 +300,15 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                 </thead>
                 <tbody>
                   {preview.map((row) => (
-                    <tr key={`${row.line}-${row.name}`}>
+                    <tr key={`${row.line}-${Object.values(row.values).join("|")}`}>
                       <td>{row.line}</td>
-                      <td style={{ color: "var(--text-primary)", fontWeight: 500 }}>{row.name || "-"}</td>
-                      {documentVariable && <td>{row.document || "-"}</td>}
+                      {personVariables.map((variable) => (
+                        <td key={variable.key} style={getTemplateFieldMetadata(variable).kind === "recipient_name" ? { color: "var(--text-primary)", fontWeight: 500 } : undefined}>
+                          {row.values[variable.key] || "-"}
+                        </td>
+                      ))}
                       <td>{company || "-"}</td>
-                      <td>{formatDateLongPtBr(issuedDate) || "-"}</td>
+                      <td>{issuedDate ? formatDateLongPtBr(issuedDate) : "-"}</td>
                       <td>
                         {row.errors.length ? (
                           <span className="chip chip-warning">{row.errors.join(", ")}</span>
@@ -269,7 +323,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                   ))}
                   {!preview.length && (
                     <tr>
-                      <td colSpan={documentVariable ? 6 : 5} style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)" }}>
+                      <td colSpan={personVariables.length + 4} style={{ padding: "1.5rem", textAlign: "center", color: "var(--text-muted)" }}>
                         Informe as pessoas para revisar o lote.
                       </td>
                     </tr>
@@ -277,21 +331,17 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                 </tbody>
               </table>
             </div>
-            {hasErrors && (
-              <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "#d97706" }}>
-                Corrija os campos destacados antes de gerar os certificados.
-              </p>
-            )}
+            {hasErrors ? <WarningMessage>Corrija os campos destacados antes de gerar os certificados.</WarningMessage> : null}
           </div>
         )}
       </div>
 
       <div style={{ marginTop: "1.5rem", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
-        <button type="button" disabled={step === 0} onClick={() => setStep((s) => Math.max(0, s - 1))} className="btn btn-ghost" style={{ opacity: step === 0 ? 0.4 : 1 }}>
+        <button type="button" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))} className="btn btn-ghost" style={{ opacity: step === 0 ? 0.4 : 1 }}>
           <ArrowLeft style={{ width: 15, height: 15 }} /> Voltar
         </button>
         {step < 2 ? (
-          <button type="button" disabled={step === 0 ? !canContinueFromData : !canContinueFromNames} onClick={() => setStep((s) => Math.min(2, s + 1))} className="btn btn-primary">
+          <button type="button" disabled={step === 0 ? !canContinueFromData : !canContinueFromNames} onClick={() => setStep((current) => Math.min(2, current + 1))} className="btn btn-primary">
             Continuar <ArrowRight style={{ width: 15, height: 15 }} />
           </button>
         ) : (
@@ -304,12 +354,26 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
         )}
       </div>
 
-      {message && (
+      {message ? (
         <p style={{ marginTop: "1rem", borderRadius: "var(--radius-md)", background: "var(--surface-2)", border: "1px solid var(--border-subtle)", padding: "0.625rem 0.875rem", fontSize: "0.875rem", color: "var(--text-secondary)" }}>
           {message}
         </p>
-      )}
+      ) : null}
     </section>
+  );
+}
+
+const hintStyle = {
+  fontSize: "0.78rem",
+  lineHeight: 1.4,
+  color: "var(--text-muted)",
+} as const;
+
+function WarningMessage({ children }: { children: ReactNode }) {
+  return (
+    <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "#d97706" }}>
+      {children}
+    </p>
   );
 }
 
@@ -342,114 +406,168 @@ function SummaryItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function splitPeople(value: string, hasDocumentField: boolean) {
-  if (!hasDocumentField) {
-    return value.split(/\r?\n|;/).map((name) => ({ name: name.trim(), document: "" })).filter((p) => p.name);
+function splitPeople(value: string, personVariables: BatchVariable[]): ParsedPerson[] {
+  const rawLines = value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = dropHeaderLine(rawLines, personVariables);
+  if (!personVariables.length) return [];
+
+  if (personVariables.length === 1) {
+    return lines
+      .join("\n")
+      .split(/\r?\n|;|,/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .map((name) => ({
+        values: { [personVariables[0].key]: name },
+        extraValues: [],
+      }));
   }
-  return value.split(/\r?\n/).map((line) => parsePersonLine(line)).filter((p) => p.name || p.document);
+
+  return lines.map((line) => parsePersonLine(line, personVariables));
 }
 
-function parsePersonLine(line: string) {
-  const value = line.trim();
-  if (!value) return { name: "", document: "" };
-  const separator = value.includes(";") ? ";" : value.includes("\t") ? "\t" : ",";
-  const [name, ...documentParts] = value.split(separator);
-  return { name: name.trim(), document: normalizeDocumentForDisplay(documentParts.join(separator).trim()) };
+function dropHeaderLine(lines: string[], personVariables: BatchVariable[]) {
+  if (!lines.length || !looksLikePeopleHeader(lines[0], personVariables)) return lines;
+  return lines.slice(1);
 }
 
-function buildPreviewRows({ people, company, issuedDate, documentVariable }: { people: Array<{ name: string; document: string }>; company: string; issuedDate: string; documentVariable: BatchTemplate["variables"][number] | null; }) {
+function looksLikePeopleHeader(line: string, personVariables: BatchVariable[]) {
+  const separator = line.includes(";") ? ";" : line.includes("\t") ? "\t" : ",";
+  const parts = line.split(separator).map(normalizeHeaderText).filter(Boolean);
+  if (!parts.length) return false;
+
+  const expected = personVariables.map((variable) => [
+    normalizeHeaderText(variable.key),
+    normalizeHeaderText(getFieldLabel(variable)),
+  ]);
+
+  return parts.every((part, index) => expected[index]?.includes(part));
+}
+
+function parsePersonLine(line: string, personVariables: BatchVariable[]): ParsedPerson {
+  const separator = line.includes(";") ? ";" : line.includes("\t") ? "\t" : ",";
+  const parts = line.split(separator).map((part) => part.trim());
+  const values: Record<string, string> = {};
+
+  for (const [index, variable] of personVariables.entries()) {
+    values[variable.key] = formatTemplateFieldValue(variable, parts[index] ?? "");
+  }
+
+  return {
+    values,
+    extraValues: parts.slice(personVariables.length).filter(Boolean),
+  };
+}
+
+function buildPreviewRows({
+  people,
+  personVariables,
+  company,
+  issuedDate,
+  sharedValues,
+  sharedVariables,
+}: {
+  people: ParsedPerson[];
+  personVariables: BatchVariable[];
+  company: string;
+  issuedDate: string;
+  sharedValues: Record<string, string>;
+  sharedVariables: BatchVariable[];
+}) {
   const seen = new Map<string, number>();
-  const seenDocuments = new Map<string, number>();
+
   return people.map<PreviewRow>((person, index) => {
     const errors: string[] = [];
-    const name = person.name.trim();
-    const document = person.document.trim();
-    const documentDigits = onlyDigits(document);
-    const normalizedName = normalizeValue(name);
-    const documentState = documentVariable ? getDocumentState(documentVariable, document) : null;
-    if (!name.trim()) errors.push("nome vazio");
+    const line = index + 1;
+
     if (!company.trim()) errors.push("empresa vazia");
     if (!issuedDate.trim()) errors.push("data vazia");
-    if (documentVariable?.required && !documentDigits) errors.push(`${getFieldLabel(documentVariable)} vazio`);
-    if (documentState && documentState.digits.length > 0 && !documentState.complete) errors.push(`${documentState.label} deve ter ${documentState.expectedLength} digitos`);
-    if (normalizedName) {
-      const firstLine = seen.get(normalizedName);
-      if (firstLine) { errors.push(`nome duplicado da linha ${firstLine}`); } else { seen.set(normalizedName, index + 1); }
+    if (person.extraValues.length) errors.push("campos extras");
+
+    for (const variable of sharedVariables) {
+      if (variable.required && !sharedValues[variable.key]?.trim()) {
+        errors.push(`${getFieldLabel(variable)} vazio`);
+      }
     }
-    if (documentDigits && documentVariable) {
-      const firstDocumentLine = seenDocuments.get(documentDigits);
-      if (firstDocumentLine) { errors.push(`${getFieldLabel(documentVariable)} duplicado da linha ${firstDocumentLine}`); } else { seenDocuments.set(documentDigits, index + 1); }
+
+    for (const variable of personVariables) {
+      const value = person.values[variable.key]?.trim() ?? "";
+      if (variable.required && !value) {
+        errors.push(`${getFieldLabel(variable)} vazio`);
+      }
+
+      const validationError = validateTemplateFieldValue(variable, value);
+      if (validationError) {
+        errors.push(`${getFieldLabel(variable)} invalido`);
+      }
+
+      const duplicateKey = getTemplateDuplicateKey(variable, value);
+      if (duplicateKey) {
+        const firstLine = seen.get(duplicateKey);
+        if (firstLine) {
+          errors.push(`${getFieldLabel(variable)} duplicado da linha ${firstLine}`);
+        } else {
+          seen.set(duplicateKey, line);
+        }
+      }
     }
-    return { line: index + 1, name, document, documentDigits, errors };
+
+    return {
+      line,
+      values: person.values,
+      errors,
+    };
   });
 }
 
-function normalizeValue(value: string) {
-  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-type DocumentMode = "CPF" | "CNPJ" | "CPF_CNPJ";
-
 function getFieldLabel(variable: { key: string; label: string }) {
-  const normalizedLabel = normalizeFieldKey(variable.label);
-  if (normalizedLabel === "cpf") return "CPF";
-  if (normalizedLabel === "cnpj") return "CNPJ";
-  return variable.label;
+  return getTemplateVariableLabel(variable);
 }
 
-function getPersonInputLabel(variable: { key: string; label: string }) {
-  return `Nome; ${getFieldLabel(variable)}`;
+function isCompanyVariable(variable: { key: string; label: string }) {
+  return getTemplateFieldMetadata(variable).kind === "company";
 }
 
-function getDocumentMode(variable: { key: string; label: string }): DocumentMode | null {
-  const key = normalizeFieldKey(variable.key);
-  const label = normalizeFieldKey(variable.label);
-  const combined = `${key}_${label}`;
-  const hasCpf = combined.includes("cpf");
-  const hasCnpj = combined.includes("cnpj");
-  const hasDocument = combined.includes("documento") || combined.includes("document");
-  if (hasCpf && hasCnpj) return "CPF_CNPJ";
-  if (hasCpf) return "CPF";
-  if (hasCnpj) return "CNPJ";
-  if (hasDocument) return "CPF_CNPJ";
-  return null;
+function getBatchBlockReason(
+  recipientVariable: BatchVariable | null,
+  personVariables: BatchVariable[],
+) {
+  if (!personVariables.length || !recipientVariable) {
+    return "Este modelo precisa de um campo de aluno/nome para emitir em lote com seguranca.";
+  }
+
+  return "";
 }
 
-function getDocumentState(variable: { key: string; label: string }, value: string) {
-  const mode = getDocumentMode(variable);
-  if (!mode) return null;
-  const digits = onlyDigits(value);
-  const inferredType = inferDocumentType(mode, digits);
-  const expectedLength = inferredType === "CNPJ" ? 14 : 11;
-  return { digits, label: inferredType, expectedLength, complete: digits.length === expectedLength };
+function getPersonInputLabel(personVariables: BatchVariable[]) {
+  return personVariables.map(getFieldLabel).join("; ") || "Nome";
 }
 
-function inferDocumentType(mode: DocumentMode, digits: string) {
-  if (mode === "CPF") return "CPF";
-  if (mode === "CNPJ") return "CNPJ";
-  return digits.length > 11 ? "CNPJ" : "CPF";
+function buildPeoplePlaceholder(personVariables: BatchVariable[]) {
+  if (personVariables.length <= 1) {
+    return "Maria Silva\nJoao Santos";
+  }
+
+  const header = getPersonInputLabel(personVariables);
+  const exampleValues = personVariables.map((variable) => {
+    const kind = getTemplateFieldMetadata(variable).kind;
+    if (kind === "recipient_name") return "Maria Silva";
+    if (kind === "cpf") return "123.456.789-00";
+    if (kind === "rg") return "MG 12.345.678";
+    if (kind === "uf") return "MG";
+    if (kind === "email") return "maria@empresa.com";
+    return getTemplateVariablePlaceholder(variable);
+  });
+
+  return `${header}\n${exampleValues.join("; ")}`;
 }
 
-function normalizeDocumentForDisplay(value: string) {
-  const digits = onlyDigits(value);
-  if (digits.length === 11) return formatCpf(digits);
-  if (digits.length === 14) return formatCnpj(digits);
-  return value.trim();
-}
-
-function onlyDigits(value: string) { return value.replace(/\D/g, ""); }
-
-function formatCpf(value: string) {
-  const d = value.slice(0, 11);
-  return [d.slice(0,3), d.slice(3,6), d.slice(6,9)].filter(Boolean).join(".") + (d.slice(9,11) ? `-${d.slice(9,11)}` : "");
-}
-
-function formatCnpj(value: string) {
-  const d = value.slice(0, 14);
-  let f = d.slice(0,2);
-  if (d.slice(2,5)) f += `.${d.slice(2,5)}`;
-  if (d.slice(5,8)) f += `.${d.slice(5,8)}`;
-  if (d.slice(8,12)) f += `/${d.slice(8,12)}`;
-  if (d.slice(12,14)) f += `-${d.slice(12,14)}`;
-  return f;
+function normalizeHeaderText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }

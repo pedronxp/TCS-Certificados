@@ -126,6 +126,25 @@ model CertificateIssue {
   @@index([hiddenAt])
 }
 
+model CertificateSequence {
+  id        String   @id
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model RateLimitAttempt {
+  id        String   @id @default(cuid())
+  action    String
+  keyHash   String
+  count     Int      @default(0)
+  resetAt   DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([action, keyHash])
+  @@index([resetAt])
+}
+
 model CertificateBatch {
   id          String                 @id @default(cuid())
   status      CertificateBatchStatus @default(RUNNING)
@@ -138,6 +157,7 @@ model CertificateBatch {
   issuedDate  String
   startedAt   DateTime               @default(now())
   finishedAt  DateTime?
+  lockedAt    DateTime?
   createdAt   DateTime               @default(now())
   updatedAt   DateTime               @updatedAt
 

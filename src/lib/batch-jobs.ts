@@ -1,4 +1,6 @@
 import { CertificateBatchStatus } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
+import { buildBatchJobValues, readBatchJobValues } from "@/lib/batch-job-values";
 import { issueCertificate } from "@/lib/certificate-service";
 import {
   buildStaleBatchErrors,
@@ -7,6 +9,10 @@ import {
 } from "@/lib/batch-status";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
+
+const BATCH_ROWS_PER_POLL = 1;
+const LEGACY_BATCH_VALUES_ERROR = "Lote antigo sem dados de processamento. Gere o lote novamente.";
+const INCOMPLETE_BATCH_VALUES_ERROR = "Dados do lote incompletos. Gere o lote novamente.";
 
 export async function startBatchJob({
   templateId,
@@ -25,13 +31,13 @@ export async function startBatchJob({
       template: { connect: { id: templateId } },
       createdBy: { connect: { id: issuedById } },
       total: rows.length,
-      values: firstRow,
+      values: buildBatchJobValues(rows, lineOffset) as Prisma.InputJsonValue,
       company: findFirstValue(firstRow, ["empresa", "company"]),
       issuedDate: findFirstValue(firstRow, DATE_FIELD_KEYS),
     },
   });
 
-  return runBatchJob({ batchId: batch.id, templateId, rows, issuedById, lineOffset });
+  return batch;
 }
 
 function findFirstValue(row: Record<string, string>, keys: readonly string[]) {
@@ -48,6 +54,20 @@ export async function getBatchJob(id: string, userId: string) {
     where: { id, createdById: userId },
     include: { template: { select: { name: true } } },
   });
+}
+
+export async function processBatchJobChunk(id: string, userId: string, limit = BATCH_ROWS_PER_POLL) {
+  const safeLimit = Math.max(1, Math.floor(limit));
+
+  for (let processedInCall = 0; processedInCall < safeLimit; processedInCall += 1) {
+    const batch = await findBatchForProcessing(id, userId);
+    if (!batch || batch.status !== CertificateBatchStatus.RUNNING) break;
+
+    const didProcess = await processNextBatchRow(batch, userId);
+    if (!didProcess) break;
+  }
+
+  return getBatchJob(id, userId);
 }
 
 export async function failStaleBatchJobs(now = new Date()) {
@@ -79,6 +99,7 @@ export async function failStaleBatchJobs(now = new Date()) {
             total: batch.total,
           }),
           finishedAt: now,
+          lockedAt: null,
         },
       }),
     ),
@@ -87,64 +108,152 @@ export async function failStaleBatchJobs(now = new Date()) {
   return staleBatches.length;
 }
 
-async function runBatchJob({
-  batchId,
-  templateId,
-  rows,
-  issuedById,
-  lineOffset,
-}: {
-  batchId: string;
-  templateId: string;
-  rows: Record<string, string>[];
-  issuedById: string;
-  lineOffset: number;
-}) {
-  const errors: string[] = [];
-  let created = 0;
-  let processed = 0;
+type BatchForProcessing = NonNullable<Awaited<ReturnType<typeof findBatchForProcessing>>>;
 
-  try {
-    for (const [index, row] of rows.entries()) {
-      try {
-        await issueCertificate({ templateId, values: row, issuedById, batchId });
-        created += 1;
-      } catch (error) {
-        errors.push(`Linha ${index + lineOffset}: ${error instanceof Error ? error.message : "erro desconhecido"}`);
-      } finally {
-        processed += 1;
-        await prisma.certificateBatch.update({
-          where: { id: batchId },
-          data: { processed, created, errors },
-        });
-      }
-    }
+function findBatchForProcessing(id: string, userId: string) {
+  return prisma.certificateBatch.findFirst({
+    where: { id, createdById: userId },
+    select: {
+      id: true,
+      status: true,
+      total: true,
+      processed: true,
+      errors: true,
+      values: true,
+      lockedAt: true,
+      templateId: true,
+      createdById: true,
+    },
+  });
+}
 
-    await prisma.certificateBatch.update({
-      where: { id: batchId },
-      data: {
-        status: CertificateBatchStatus.COMPLETED,
-        processed,
-        created,
-        errors,
-        finishedAt: new Date(),
-      },
-    });
-  } catch (error) {
-    errors.push(error instanceof Error ? error.message : "Falha ao gerar lote.");
-    return prisma.certificateBatch.update({
-      where: { id: batchId },
-      data: {
-        status: CertificateBatchStatus.FAILED,
-        processed,
-        created,
-        errors,
-        finishedAt: new Date(),
-      },
-    });
+async function processNextBatchRow(batch: BatchForProcessing, userId: string) {
+  if (batch.lockedAt) return false;
+
+  const batchValues = readBatchJobValues(batch.values);
+  if (!batchValues) {
+    await failBatchJob(batch.id, batch.errors, LEGACY_BATCH_VALUES_ERROR);
+    return false;
   }
 
-  return prisma.certificateBatch.findUniqueOrThrow({
-    where: { id: batchId },
+  if (batchValues.rows.length < batch.total) {
+    await failBatchJob(batch.id, batch.errors, INCOMPLETE_BATCH_VALUES_ERROR);
+    return false;
+  }
+
+  if (batch.processed >= batch.total) {
+    await finishBatchJobIfDone(batch.id);
+    return false;
+  }
+
+  const rowIndex = batch.processed;
+  const claim = await prisma.certificateBatch.updateMany({
+    where: {
+      id: batch.id,
+      createdById: userId,
+      status: CertificateBatchStatus.RUNNING,
+      processed: rowIndex,
+      lockedAt: null,
+    },
+    data: {
+      processed: rowIndex + 1,
+      lockedAt: new Date(),
+    },
   });
+
+  if (claim.count === 0) return false;
+
+  const row = batchValues.rows[rowIndex];
+  const line = rowIndex + batchValues.lineOffset;
+  let rowError: string | null = null;
+
+  try {
+    await issueCertificate({
+      templateId: batch.templateId,
+      values: row,
+      issuedById: batch.createdById,
+      batchId: batch.id,
+    });
+  } catch (error) {
+    rowError = `Linha ${line}: ${error instanceof Error ? error.message : "erro desconhecido"}`;
+  }
+
+  await saveBatchRowResult(batch.id, rowError);
+  await finishBatchJobIfDone(batch.id);
+  return true;
+}
+
+async function saveBatchRowResult(batchId: string, rowError: string | null) {
+  if (!rowError) {
+    await prisma.certificateBatch.updateMany({
+      where: { id: batchId, status: CertificateBatchStatus.RUNNING },
+      data: {
+        created: { increment: 1 },
+        lockedAt: null,
+      },
+    });
+    return;
+  }
+
+  const batch = await prisma.certificateBatch.findUnique({
+    where: { id: batchId },
+    select: { status: true, errors: true },
+  });
+
+  if (!batch || batch.status !== CertificateBatchStatus.RUNNING) return;
+
+  await prisma.certificateBatch.updateMany({
+    where: { id: batchId, status: CertificateBatchStatus.RUNNING },
+    data: {
+      errors: [...normalizeBatchErrors(batch.errors), rowError],
+      lockedAt: null,
+    },
+  });
+}
+
+async function finishBatchJobIfDone(batchId: string) {
+  const batch = await prisma.certificateBatch.findUnique({
+    where: { id: batchId },
+    select: {
+      status: true,
+      total: true,
+      processed: true,
+      created: true,
+      errors: true,
+      lockedAt: true,
+    },
+  });
+
+  if (!batch || batch.status !== CertificateBatchStatus.RUNNING || batch.lockedAt) return;
+  if (batch.processed < batch.total) return;
+
+  const errors = normalizeBatchErrors(batch.errors);
+  if (batch.created + errors.length < batch.processed) return;
+
+  await prisma.certificateBatch.updateMany({
+    where: { id: batchId, status: CertificateBatchStatus.RUNNING, lockedAt: null },
+    data: {
+      status: CertificateBatchStatus.COMPLETED,
+      finishedAt: new Date(),
+    },
+  });
+}
+
+async function failBatchJob(batchId: string, currentErrors: unknown, message: string) {
+  const errors = normalizeBatchErrors(currentErrors);
+  const nextErrors = errors.includes(message) ? errors : [...errors, message];
+
+  await prisma.certificateBatch.update({
+    where: { id: batchId },
+    data: {
+      status: CertificateBatchStatus.FAILED,
+      errors: nextErrors,
+      lockedAt: null,
+      finishedAt: new Date(),
+    },
+  });
+}
+
+function normalizeBatchErrors(errors: unknown) {
+  return Array.isArray(errors) ? errors.map((error) => String(error)).filter(Boolean) : [];
 }

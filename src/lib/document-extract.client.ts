@@ -2,9 +2,11 @@ import { extractVariableKeys } from "@/lib/certificate-layout";
 import type { TemplateElement, TemplatePageBorder } from "@/lib/certificate-layout";
 
 export type ExtractedDocumentPage = {
+  index?: number;
   width: number;
   height: number;
   orientation: "landscape" | "portrait";
+  imageDataUrl?: string;
   border?: TemplatePageBorder;
 };
 
@@ -13,12 +15,14 @@ type ExtractedDocumentPreview = {
   editable: boolean;
   elements: TemplateElement[];
   page?: ExtractedDocumentPage;
+  pages?: ExtractedDocumentPage[];
   renderDataUrl?: string;
   renderFileType?: string;
   renderEngine?: string;
   imageDataUrl?: string;
   imageEngine?: string;
   variables?: string[];
+  converterOffline?: boolean;
 };
 
 export async function extractDocumentPreview(file: File): Promise<ExtractedDocumentPreview> {
@@ -35,6 +39,7 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
   const serverPreview = await extractDocumentPreviewFromApi(file);
   if (serverPreview) {
     const page = serverPreview.page ?? await extractDocxPage(arrayBuffer);
+    const pages = normalizeExtractedPages(serverPreview.pages, page);
     const elements = serverPreview.editable
       ? serverPreview.elements.length > 0
         ? serverPreview.elements
@@ -46,6 +51,7 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
       editable: elements.length > 0,
       elements,
       page: growPageToFit(page, elements),
+      pages,
     };
   }
 
@@ -61,8 +67,26 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
     editable: elements.length > 0,
     elements,
     page: growPageToFit(page, elements),
+    pages: page ? [page] : undefined,
     variables: extractVariableKeys(result.value),
   };
+}
+
+export async function extractDocumentPreviewFromDataUrl({
+  dataUrl,
+  fileName,
+  fileType,
+}: {
+  dataUrl: string;
+  fileName?: string;
+  fileType?: string;
+}) {
+  const bytes = dataUrlToUint8Array(dataUrl);
+  const file = new File([bytes], fileName || "documento.docx", {
+    type: fileType || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+
+  return extractDocumentPreview(file);
 }
 
 async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocumentPreview | null> {
@@ -84,9 +108,11 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       imageDataUrl?: string;
       imageEngine?: string;
       page?: ExtractedDocumentPage;
+      pages?: ExtractedDocumentPage[];
       variables?: string[];
       editable?: boolean;
       elements?: TemplateElement[];
+      converterOffline?: boolean;
     };
 
     return {
@@ -97,9 +123,11 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       imageDataUrl: preview.imageDataUrl,
       imageEngine: preview.imageEngine,
       page: preview.page,
+      pages: preview.pages,
       editable: Boolean(preview.editable),
       elements: preview.elements ?? [],
       variables: preview.variables ?? extractVariableKeys(preview.previewHtml ?? ""),
+      converterOffline: preview.converterOffline,
     };
   } catch (error) {
     console.warn("Preview DOCX via API indisponivel; usando fallback no navegador.", error);
@@ -178,76 +206,78 @@ async function renderDocxToEditableElements(
 }
 
 function extractRenderedEditableElements(host: HTMLElement, page: ExtractedDocumentPage | undefined) {
-  const pageElement =
-    host.querySelector<HTMLElement>("section.docx-editable") ??
-    host.querySelector<HTMLElement>("section") ??
-    host;
-  const pageRect = pageElement.getBoundingClientRect();
-  const pageWidth = Math.max(1, Math.round(page?.width ?? pageRect.width ?? 1123));
   const elements: TemplateElement[] = [];
+  const pageElements = Array.from(host.querySelectorAll<HTMLElement>("section.docx-editable"));
+  const pages = pageElements.length ? pageElements : [host.querySelector<HTMLElement>("section") ?? host];
 
-  for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("img"))) {
-    const rect = relativeRect(graphic, pageRect);
-    if (!rect || rect.width < 6 || rect.height < 6) continue;
+  pages.forEach((pageElement, pageIndex) => {
+    const pageRect = pageElement.getBoundingClientRect();
+    const pageWidth = Math.max(1, Math.round(page?.width ?? pageRect.width ?? 1123));
 
-    const content = graphic.getAttribute("src") || (graphic instanceof HTMLImageElement ? graphic.src : "");
-    if (!content) continue;
+    for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("img"))) {
+      const rect = relativeRect(graphic, pageRect);
+      if (!rect || rect.width < 6 || rect.height < 6) continue;
 
-    addImageElement(elements, content, rect, pageWidth);
-  }
+      const content = graphic.getAttribute("src") || (graphic instanceof HTMLImageElement ? graphic.src : "");
+      if (!content) continue;
 
-  for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("div,span"))) {
-    if (graphic.textContent?.trim()) continue;
-    const content = extractCssImageUrl(window.getComputedStyle(graphic).backgroundImage);
-    if (!content) continue;
-
-    const rect = relativeRect(graphic, pageRect);
-    if (!rect || rect.width < 6 || rect.height < 6 || rect.width > 520 || rect.height > 320) continue;
-    addImageElement(elements, content, rect, pageWidth);
-  }
-
-  for (const block of Array.from(pageElement.querySelectorAll<HTMLElement>("p,h1,h2,h3,h4,h5,h6,td,th"))) {
-    if ((block.tagName === "TD" || block.tagName === "TH") && block.querySelector("p,h1,h2,h3,h4,h5,h6")) {
-      continue;
+      addImageElement(elements, content, rect, pageWidth, pageIndex);
     }
 
-    const text = normalizeText(block.textContent ?? "");
-    if (!text) continue;
+    for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("div,span"))) {
+      if (graphic.textContent?.trim()) continue;
+      const content = extractCssImageUrl(window.getComputedStyle(graphic).backgroundImage);
+      if (!content) continue;
 
-    const rect = relativeRect(block, pageRect);
-    if (!rect || rect.width < 4 || rect.height < 4) continue;
+      const rect = relativeRect(graphic, pageRect);
+      if (!rect || rect.width < 6 || rect.height < 6 || rect.width > 520 || rect.height > 320) continue;
+      addImageElement(elements, content, rect, pageWidth, pageIndex);
+    }
 
-    const styleElement = firstTextElement(block) ?? block;
-    const blockStyle = window.getComputedStyle(block);
-    const textStyle = window.getComputedStyle(styleElement);
-    const fontSize = clamp(Math.round(parseCssPixels(textStyle.fontSize) || 14), 8, 72);
-    const x = clamp(Math.round(rect.x), 0, Math.max(0, pageWidth - 8));
-    const y = Math.max(0, Math.round(rect.y));
-    const singleVariableKey = extractSingleVariableKey(text);
+    for (const block of Array.from(pageElement.querySelectorAll<HTMLElement>("p,h1,h2,h3,h4,h5,h6,td,th"))) {
+      if ((block.tagName === "TD" || block.tagName === "TH") && block.querySelector("p,h1,h2,h3,h4,h5,h6")) {
+        continue;
+      }
 
-    elements.push({
-      id: randomId("text"),
-      type: singleVariableKey ? "variable" : "text",
-      content: text,
-      variableKey: singleVariableKey,
-      variableLabel: singleVariableKey,
-      variableRequired: true,
-      x,
-      y,
-      width: clamp(Math.round(rect.width), 24, Math.max(24, pageWidth - x)),
-      height: Math.max(Math.round(rect.height), Math.ceil(fontSize * 1.35)),
-      fontSize,
-      fontFamily: normalizeFontFamily(textStyle.fontFamily),
-      color: cssColorToHex(textStyle.color),
-      align: normalizeAlign(blockStyle.textAlign),
-      bold: isBold(textStyle.fontWeight, block.tagName),
-      italic: textStyle.fontStyle === "italic" || textStyle.fontStyle === "oblique",
-      underline: textStyle.textDecorationLine.includes("underline"),
-      lineHeight: normalizeLineHeight(textStyle.lineHeight, fontSize),
-    });
-  }
+      const text = normalizeText(block.textContent ?? "");
+      if (!text) continue;
 
-  return elements.sort((a, b) => a.y - b.y || a.x - b.x);
+      const rect = relativeRect(block, pageRect);
+      if (!rect || rect.width < 4 || rect.height < 4) continue;
+
+      const styleElement = firstTextElement(block) ?? block;
+      const blockStyle = window.getComputedStyle(block);
+      const textStyle = window.getComputedStyle(styleElement);
+      const fontSize = clamp(Math.round(parseCssPixels(textStyle.fontSize) || 14), 8, 72);
+      const x = clamp(Math.round(rect.x), 0, Math.max(0, pageWidth - 8));
+      const y = Math.max(0, Math.round(rect.y));
+      const singleVariableKey = extractSingleVariableKey(text);
+
+      elements.push({
+        id: randomId("text"),
+        type: singleVariableKey ? "variable" : "text",
+        content: text,
+        variableKey: singleVariableKey,
+        variableLabel: singleVariableKey,
+        variableRequired: true,
+        x,
+        y,
+        pageIndex,
+        width: clamp(Math.round(rect.width), 24, Math.max(24, pageWidth - x)),
+        height: Math.max(Math.round(rect.height), Math.ceil(fontSize * 1.35)),
+        fontSize,
+        fontFamily: normalizeFontFamily(textStyle.fontFamily),
+        color: cssColorToHex(textStyle.color),
+        align: normalizeAlign(blockStyle.textAlign),
+        bold: isBold(textStyle.fontWeight, block.tagName),
+        italic: textStyle.fontStyle === "italic" || textStyle.fontStyle === "oblique",
+        underline: textStyle.textDecorationLine.includes("underline"),
+        lineHeight: normalizeLineHeight(textStyle.lineHeight, fontSize),
+      });
+    }
+  });
+
+  return elements.sort((a, b) => (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || a.y - b.y || a.x - b.x);
 }
 
 function addImageElement(
@@ -255,6 +285,7 @@ function addImageElement(
   content: string,
   rect: { x: number; y: number; width: number; height: number },
   pageWidth: number,
+  pageIndex = 0,
 ) {
   const x = clamp(Math.round(rect.x), 0, pageWidth);
   const y = Math.max(0, Math.round(rect.y));
@@ -277,6 +308,7 @@ function addImageElement(
     variableRequired: true,
     x,
     y,
+    pageIndex,
     width,
     height,
     fontSize: 12,
@@ -288,6 +320,17 @@ function addImageElement(
     underline: false,
     lineHeight: 1.15,
   });
+}
+
+function normalizeExtractedPages(
+  pages: ExtractedDocumentPage[] | undefined,
+  fallbackPage: ExtractedDocumentPage | undefined,
+) {
+  if (Array.isArray(pages) && pages.length > 0) {
+    return pages.map((page, index) => ({ ...page, index: page.index ?? index }));
+  }
+
+  return fallbackPage ? [{ ...fallbackPage, index: fallbackPage.index ?? 0 }] : undefined;
 }
 
 function extractCssImageUrl(value: string) {

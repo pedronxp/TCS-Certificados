@@ -54,20 +54,22 @@ export async function GET(
       { status: 410 },
     );
   }
-  let regeneratedContent: Buffer | null;
-  let regenerationError: Error | null = null;
-
-  try {
-    regeneratedContent = await regenerateFileContent(id, fileType);
-  } catch (error) {
-    console.error("Falha ao regenerar arquivo do certificado.", error);
-    regeneratedContent = null;
-    regenerationError = error instanceof Error ? error : new Error("Não foi possível gerar o arquivo do certificado.");
-  }
-
   const storedContent = (file.content?.length ? Buffer.from(file.content) : null)
     ?? await loadStoredFileContent(file.storagePath);
-  const content = regeneratedContent ?? storedContent;
+  let regeneratedContent: Buffer | null = null;
+  let regenerationError: Error | null = null;
+
+  if (!storedContent) {
+    try {
+      regeneratedContent = await regenerateFileContent(id, fileType);
+    } catch (error) {
+      console.error("Falha ao regenerar arquivo do certificado.", error);
+      regeneratedContent = null;
+      regenerationError = error instanceof Error ? error : new Error("Não foi possível gerar o arquivo do certificado.");
+    }
+  }
+
+  const content = storedContent ?? regeneratedContent;
 
   if (!content) {
     if (regenerationError) {

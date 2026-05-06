@@ -11,6 +11,7 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "tsx prisma/seed.ts",
     "playwright:install": "playwright install chromium"
   },
@@ -26,6 +27,7 @@
     "docx-preview": "^0.3.7",
     "docxtemplater": "^3.68.6",
     "dotenv": "^17.4.2",
+    "immer": "^11.1.6",
     "jose": "^6.2.3",
     "jszip": "^3.10.1",
     "lucide-react": "^1.11.0",
@@ -40,7 +42,8 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "read-excel-file": "^9.0.9",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

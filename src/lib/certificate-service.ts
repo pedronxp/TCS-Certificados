@@ -10,10 +10,12 @@ import {
 import { deleteCertificateFiles, uploadCertificateFile } from "@/lib/supabase";
 import {
   buildVerificationTemplateValues,
-  generateNextVerificationCode,
+  generateVerificationCode,
   isSystemCertificateVariableKey,
-  VERIFICATION_CODE_PREFIX,
+  parseVerificationSequence,
 } from "@/lib/verification-code";
+
+const CERTIFICATE_SEQUENCE_ID = "global";
 
 export async function issueCertificate({
   templateId,
@@ -49,13 +51,7 @@ export async function issueCertificate({
   }
 
   const issuedAt = new Date();
-  const verificationCode = await generateNextVerificationCode(async () => {
-    const existingIssues = await prisma.certificateIssue.findMany({
-      where: { verificationCode: { startsWith: `${VERIFICATION_CODE_PREFIX}-` } },
-      select: { verificationCode: true },
-    });
-    return existingIssues.map((issue) => issue.verificationCode);
-  }, issuedAt);
+  const verificationCode = await reserveNextVerificationCode(issuedAt);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const issueValues = { ...securedValues, ...buildVerificationTemplateValues(verificationCode) };
   const normalizedValues = normalizeIssueValues(normalizeDateValues(issueValues, template.variables));
@@ -173,6 +169,32 @@ export async function renderCertificatePreviewPdf({
 
 export async function expireCertificateDocuments(ids: string[], now = new Date()) {
   return expireCertificateDocumentFiles(ids, { deleteAt: now });
+}
+
+async function reserveNextVerificationCode(issuedAt: Date) {
+  const sequence = await prisma.certificateSequence.upsert({
+    where: { id: CERTIFICATE_SEQUENCE_ID },
+    update: { value: { increment: 1 } },
+    create: {
+      id: CERTIFICATE_SEQUENCE_ID,
+      value: await findHighestExistingVerificationSequence() + 1,
+    },
+    select: { value: true },
+  });
+
+  return generateVerificationCode(sequence.value, issuedAt);
+}
+
+async function findHighestExistingVerificationSequence() {
+  const existingIssues = await prisma.certificateIssue.findMany({
+    where: { verificationCode: { startsWith: "TCS-BR-" } },
+    select: { verificationCode: true },
+  });
+
+  return existingIssues.reduce((highestSequence, issue) => {
+    const sequence = parseVerificationSequence(issue.verificationCode);
+    return sequence && sequence > highestSequence ? sequence : highestSequence;
+  }, 0);
 }
 
 async function renderPdfBufferSafely(input: RenderInput) {
@@ -339,14 +361,26 @@ function findDocumentValue(values: NormalizedIssueValues) {
     "cpf_cnpj",
     "cpf_ou_cnpj",
     "documento_cpf_cnpj",
+    "doc",
+    "id",
+    "rg",
+    "identidade",
   ]);
 
   if (directDocument) return directDocument;
 
   for (const [key, value] of Object.entries(values.normalized)) {
+    const keyTokens = key.split("_").filter(Boolean);
     if (
       value &&
-      (key.includes("cpf") || key.includes("cnpj") || key.includes("documento") || key.includes("document"))
+      (keyTokens.includes("cpf") ||
+        keyTokens.includes("cnpj") ||
+        keyTokens.includes("documento") ||
+        keyTokens.includes("document") ||
+        keyTokens.includes("doc") ||
+        keyTokens.includes("rg") ||
+        key === "id" ||
+        keyTokens.includes("identidade"))
     ) {
       return value;
     }

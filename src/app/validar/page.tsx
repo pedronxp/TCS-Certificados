@@ -12,6 +12,7 @@ export const metadata: Metadata = {
 
 type ValidateSearchParams = {
   codigo?: string | string[];
+  documento?: string | string[];
 };
 
 export default async function PublicValidationSearchPage({
@@ -19,10 +20,14 @@ export default async function PublicValidationSearchPage({
 }: {
   searchParams: Promise<ValidateSearchParams>;
 }) {
-  const codigo = normalizeVerificationCode((await searchParams).codigo);
+  const params = await searchParams;
+  const codigo = normalizeVerificationCode(params.codigo);
+  const documentoParam = params.documento;
+  const documento = Array.isArray(documentoParam) ? documentoParam[0] : documentoParam;
 
   if (codigo) {
-    redirect(`/validar/${encodeURIComponent(codigo)}`);
+    const query = documento?.trim() ? `?documento=${encodeURIComponent(documento.trim())}` : "";
+    redirect(`/validar/${encodeURIComponent(codigo)}${query}`);
   }
 
   return (
@@ -52,7 +57,7 @@ export default async function PublicValidationSearchPage({
               pelo QR Code para conferir a autenticidade do documento sem acessar a plataforma.
             </p>
 
-            <form action="/validar" className="public-validation-form" method="get">
+            <form action="/validar" className="public-validation-form public-validation-form-wide" method="get">
               <label className="field">
                 <span className="field-label">C&oacute;digo de valida&ccedil;&atilde;o</span>
                 <input
@@ -63,13 +68,28 @@ export default async function PublicValidationSearchPage({
                   autoComplete="off"
                   inputMode="text"
                   minLength={4}
-                  placeholder="Ex.: 5_8FLUDNR6XI"
+                  placeholder="Ex.: TCS-BR-2026-0042"
+                />
+              </label>
+
+              <label className="field">
+                <span className="field-label">Documento do participante</span>
+                <small className="public-field-hint">
+                  Informe o CPF, RG ou documento que aparece no certificado para liberar a confer&ecirc;ncia.
+                </small>
+                <input
+                  name="documento"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  inputMode="text"
+                  placeholder="Ex.: 123.456.789-00 ou MG 12.345.678"
                 />
               </label>
 
               <button className="btn btn-primary" type="submit">
                 <SearchCheck className="size-4" />
-                Consultar certificado
+                Verificar documento
               </button>
             </form>
 
@@ -87,8 +107,8 @@ export default async function PublicValidationSearchPage({
             </div>
             <h2>Onde encontrar o c&oacute;digo</h2>
             <p>
-              O c&oacute;digo aparece no certificado junto ao QR Code. A consulta aceita certificados
-              antigos com c&oacute;digos sem padr&atilde;o e certificados novos com numera&ccedil;&atilde;o.
+              O c&oacute;digo completo aparece no certificado junto ao QR Code. A consulta aceita
+              certificados antigos com c&oacute;digos sem padr&atilde;o e certificados novos com numera&ccedil;&atilde;o.
             </p>
           </aside>
         </div>

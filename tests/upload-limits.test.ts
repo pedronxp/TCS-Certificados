@@ -3,10 +3,12 @@ import { test } from "node:test";
 import {
   MAX_BATCH_ROWS,
   MAX_BATCH_UPLOAD_BYTES,
+  MAX_TEMPLATE_PAYLOAD_BYTES,
   validateBatchRowCount,
   validateBatchSpreadsheetFile,
   validateDocxFile,
   validateTemplateImportFile,
+  validateTemplatePayloadSize,
 } from "../src/lib/upload-limits";
 
 test("accepts supported batch spreadsheet formats", () => {
@@ -31,6 +33,14 @@ test("validates template and DOCX uploads", () => {
 test("limits batch row count", () => {
   assert.equal(validateBatchRowCount(MAX_BATCH_ROWS), null);
   assert.match(validateBatchRowCount(MAX_BATCH_ROWS + 1) ?? "", /maximo/);
+});
+
+test("limits saved template payload size", () => {
+  assert.equal(validateTemplatePayloadSize({ layout: { elements: [] } }), null);
+  assert.match(
+    validateTemplatePayloadSize({ layout: { baseFileDataUrl: "x".repeat(MAX_TEMPLATE_PAYLOAD_BYTES) } }) ?? "",
+    /Modelo muito grande/,
+  );
 });
 
 function file(name: string, type: string, size: number) {

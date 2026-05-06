@@ -1,4 +1,5 @@
 export const MAX_TEMPLATE_UPLOAD_BYTES = 10 * 1024 * 1024;
+export const MAX_TEMPLATE_PAYLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_BATCH_UPLOAD_BYTES = 5 * 1024 * 1024;
 export const MAX_BATCH_ROWS = 500;
 
@@ -44,6 +45,12 @@ export function validateTemplateImportFile(file: File) {
   return allowedByName || allowedByType
     ? null
     : "Envie um modelo DOCX, PDF ou imagem valido.";
+}
+
+export function validateTemplatePayloadSize(payload: unknown) {
+  const size = Buffer.byteLength(JSON.stringify(payload ?? {}), "utf8");
+  if (size <= MAX_TEMPLATE_PAYLOAD_BYTES) return null;
+  return `Modelo muito grande. Salve um modelo de ate ${formatBytes(MAX_TEMPLATE_PAYLOAD_BYTES)}.`;
 }
 
 export function validateBatchRowCount(total: number) {

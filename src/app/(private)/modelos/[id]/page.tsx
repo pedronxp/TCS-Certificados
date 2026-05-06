@@ -5,7 +5,7 @@ import {
   CertificateTemplatePreview,
   getTemplatePreviewImage,
 } from "@/components/templates/certificate-template-preview";
-import { templateLayoutSchema } from "@/lib/certificate-layout";
+import { normalizeVisualDocxLayout, templateLayoutSchema } from "@/lib/certificate-layout";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -28,7 +28,7 @@ export default async function ViewTemplatePage({
 
   if (!template) notFound();
 
-  const layout = templateLayoutSchema.parse(template.layout);
+  const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse(template.layout));
   const imageSrc = getTemplatePreviewImage({
     background: template.background,
     layout,

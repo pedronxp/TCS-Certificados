@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 
 interface LoginFormProps {
   redirectTo?: string;
@@ -32,6 +31,11 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
       });
 
       if (!response.ok) {
+        const data = (await response.json().catch(() => null)) as { error?: string } | null;
+        if (response.status === 429 && data?.error) {
+          setError(data.error);
+          return;
+        }
         if (response.status === 401) {
           setError("E-mail ou senha inválidos. Verifique suas credenciais.");
           return;
@@ -128,20 +132,6 @@ export function LoginForm({ redirectTo = "/dashboard" }: LoginFormProps) {
           "Entrar na plataforma"
         )}
       </button>
-
-      {/* Divider */}
-      <div className="auth-divider">
-        <span>Não tem uma conta?</span>
-      </div>
-
-      {/* Register link */}
-      <Link
-        href="/register"
-        className="btn btn-ghost w-full"
-        id="go-to-register-link"
-      >
-        Criar conta gratuita
-      </Link>
     </form>
   );
 }

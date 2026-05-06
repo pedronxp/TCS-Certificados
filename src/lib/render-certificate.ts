@@ -3,15 +3,13 @@ import Docxtemplater from "docxtemplater";
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import PizZip from "pizzip";
 import QRCode from "qrcode";
-import { fillTemplateText, normalizeVariableKey, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
-import { convertDocxToPdfWithCloudConvert } from "@/lib/cloudconvert";
-import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
+import { fillTemplateText, normalizeVariableKey, normalizeVisualDocxLayout, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
 import { convertDocxToPdfWithGotenberg } from "@/lib/gotenberg";
-import { convertDocxToPdfWithMicrosoftGraph } from "@/lib/microsoft-graph";
+import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
 import { buildVerificationTemplateValues } from "@/lib/verification-code";
 
 export const DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE =
-  "Conversor DOCX para PDF indisponivel. Configure MICROSOFT_GRAPH_*, CLOUDCONVERT_API_KEY, GOTENBERG_URL com uma API Gotenberg externa ou LIBREOFFICE_PATH em um servidor com LibreOffice.";
+  "Conversor DOCX para PDF indisponivel. Configure GOTENBERG_URL com uma instancia Gotenberg externa (gratuita) ou LIBREOFFICE_PATH em ambiente local.";
 
 export type RenderInput = {
   template: {
@@ -27,7 +25,7 @@ export type RenderInput = {
 };
 
 export async function renderCertificateHtml(input: RenderInput) {
-  const layout = templateLayoutSchema.parse(input.template.layout);
+  const layout = parseRenderLayout(input.template.layout);
   const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
   const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
   const values = buildRenderValues(input);
@@ -44,7 +42,7 @@ export async function renderCertificateHtml(input: RenderInput) {
 }
 
 export async function renderPdfBuffer(input: RenderInput) {
-  const layout = templateLayoutSchema.parse(input.template.layout);
+  const layout = parseRenderLayout(input.template.layout);
   if (layout.baseFileType === "application/pdf" && layout.baseFileDataUrl) {
     return renderPdfFromBaseTemplate(input, layout);
   }
@@ -83,7 +81,7 @@ export async function renderPdfBuffer(input: RenderInput) {
 }
 
 export async function renderDocxBuffer(input: RenderInput) {
-  const layout = templateLayoutSchema.parse(input.template.layout);
+  const layout = parseRenderLayout(input.template.layout);
   if (isNativeDocxBaseLayout(layout)) {
     return renderDocxFromBaseTemplate(input, layout);
   }
@@ -138,8 +136,6 @@ export async function renderDocxBuffer(input: RenderInput) {
 
 async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const pdfDocument = await PDFDocument.load(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
-  const firstPage = pdfDocument.getPage(0);
-  const { width: pageWidth, height: pageHeight } = firstPage.getSize();
   const fonts = await embedPdfFonts(pdfDocument);
   const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
   const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
@@ -147,6 +143,9 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
   const values = buildRenderValues(input);
 
   for (const element of layout.elements) {
+    const pageIndex = Math.min(Math.max(element.pageIndex ?? 0, 0), pdfDocument.getPageCount() - 1);
+    const page = pdfDocument.getPage(pageIndex);
+    const { width: pageWidth, height: pageHeight } = page.getSize();
     const x = (element.x / input.template.width) * pageWidth;
     const yFromTop = (element.y / input.template.height) * pageHeight;
     const elementWidth = (element.width / input.template.width) * pageWidth;
@@ -154,7 +153,7 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
     const fontSize = (element.fontSize / input.template.height) * pageHeight;
 
     if (element.type === "qr") {
-      firstPage.drawImage(qrImage, {
+      page.drawImage(qrImage, {
         x,
         y: pageHeight - yFromTop - elementHeight,
         width: Math.min(elementWidth, elementHeight),
@@ -165,7 +164,7 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
 
     if (element.type === "image") continue;
 
-    drawPdfTextElement(firstPage, {
+    drawPdfTextElement(page, {
       text: resolveElementText(element, values),
       x,
       topY: pageHeight - yFromTop,
@@ -182,14 +181,15 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
 
 async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const docxBuffer = renderDocxFromBaseTemplate(input, layout);
-  const microsoftGraphPdf = await convertDocxToPdfWithMicrosoftGraph(docxBuffer);
-  if (microsoftGraphPdf) return Buffer.from(microsoftGraphPdf);
-  const cloudConvertPdf = await convertDocxToPdfWithCloudConvert(docxBuffer);
-  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
+
+  // Motor primário: Gotenberg (Open Source, hospedado gratuitamente)
   const gotenbergPdf = await convertDocxToPdfWithGotenberg(docxBuffer);
   if (gotenbergPdf) return Buffer.from(gotenbergPdf);
+
+  // Fallback: LibreOffice local (apenas em dev)
   const libreOfficePdf = await convertDocxToPdfBuffer(docxBuffer);
   if (libreOfficePdf) return Buffer.from(libreOfficePdf);
+
   return null;
 }
 
@@ -465,42 +465,69 @@ function certificateHtml({
   qrDataUrl: string;
   verificationCode: string;
 }) {
-  const basePreview = layout.baseFileType?.includes("wordprocessingml") && layout.basePreviewHtml && !layout.baseFileDataUrl
-    ? `<div class="base-preview">${fillTemplateHtml(layout.basePreviewHtml, values)}</div>`
-    : "";
-  const baseImage = layout.baseImageDataUrl
-    ? `<img src="${escapeHtml(layout.baseImageDataUrl)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:fill;" />`
-    : "";
+  const pages = buildRenderPages(layout, width, height, background);
   const showGeneratedFrame = !background && !layout.baseImageDataUrl && !layout.baseFileDataUrl && !layout.basePreviewHtml;
   const generatedFrameCss = showGeneratedFrame
     ? ".page:before{content:\"\";position:absolute;inset:24px;border:2px solid #0f766e;pointer-events:none}.page:after{content:\"\";position:absolute;inset:38px;border:1px solid #94a3b8;pointer-events:none}"
     : "";
-  const baseBorder = layout.basePageBorder
-    ? `<div style="position:absolute;inset:${layout.basePageBorder.inset}px;border:${layout.basePageBorder.width}px solid ${layout.basePageBorder.color};pointer-events:none;"></div>`
-    : "";
+  const pageHtml = pages.map((page) => {
+    const basePreview = page.index === 0 && layout.baseFileType?.includes("wordprocessingml") && layout.basePreviewHtml && !layout.baseFileDataUrl
+      ? `<div class="base-preview">${fillTemplateHtml(layout.basePreviewHtml, values)}</div>`
+      : "";
+    const baseImage = page.background
+      ? `<img src="${escapeHtml(page.background)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:fill;" />`
+      : "";
+    const baseBorder = page.border
+      ? `<div style="position:absolute;inset:${page.border.inset}px;border:${page.border.width}px solid ${page.border.color};pointer-events:none;"></div>`
+      : "";
+    const elements = layout.elements
+      .filter((element) => (element.pageIndex ?? 0) === page.index)
+      .map((element) => {
+        const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};font-style:${element.italic ? "italic" : "normal"};text-decoration:${element.underline ? "underline" : "none"};text-align:${element.align};display:flex;align-items:${element.type === "text" ? "flex-start" : "center"};justify-content:${justify(element.align)};overflow:hidden;white-space:pre-wrap;word-break:break-word;line-height:${resolveLineHeight(element.lineHeight)};`;
 
-  const elements = layout.elements
-    .map((element) => {
-      const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};font-style:${element.italic ? "italic" : "normal"};text-decoration:${element.underline ? "underline" : "none"};text-align:${element.align};display:flex;align-items:${element.type === "text" ? "flex-start" : "center"};justify-content:${justify(element.align)};overflow:hidden;white-space:pre-wrap;word-break:break-word;line-height:${resolveLineHeight(element.lineHeight)};`;
+        if (element.type === "image") {
+          return `<img src="${escapeHtml(element.content)}" style="${common};object-fit:contain;" />`;
+        }
 
-      if (element.type === "image") {
-        return `<img src="${escapeHtml(element.content)}" style="${common};object-fit:contain;" />`;
-      }
+        if (element.type === "qr") {
+          return `<div style="${common};flex-direction:column;gap:6px;"><img src="${qrDataUrl}" style="width:${Math.min(element.width, element.height)}px;height:${Math.min(element.width, element.height)}px;" /><span style="font-size:10px;color:#334155;">${verificationCode}</span></div>`;
+        }
 
-      if (element.type === "qr") {
-        return `<div style="${common};flex-direction:column;gap:6px;"><img src="${qrDataUrl}" style="width:${Math.min(element.width, element.height)}px;height:${Math.min(element.width, element.height)}px;" /><span style="font-size:10px;color:#334155;">${verificationCode}</span></div>`;
-      }
+        const text =
+          element.type === "variable" && element.variableKey
+            ? values[element.variableKey] ?? ""
+            : fillTemplateText(element.content, values);
 
-      const text =
-        element.type === "variable" && element.variableKey
-          ? values[element.variableKey] ?? ""
-          : fillTemplateText(element.content, values);
+        return `<div style="${common}">${escapeHtml(text)}</div>`;
+      })
+      .join("");
 
-      return `<div style="${common}">${escapeHtml(text)}</div>`;
-    })
-    .join("");
+    return `<main class="page" style="width:${page.width}px;height:${page.height}px;background:${page.background ? "#fff" : "#f8fafc"};">${baseImage}${basePreview}${baseBorder}${elements}</main>`;
+  }).join("");
 
-  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff}.page{position:relative;width:${width}px;height:${height}px;overflow:hidden;background:${background || layout.baseImageDataUrl ? "#fff" : "#f8fafc"};${background ? `background-image:url('${background}');background-size:cover;background-position:center;` : ""}}${generatedFrameCss}.base-preview{position:absolute;inset:0;overflow:hidden;background:#fff;padding:32px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.45}.base-preview p{margin:0 0 10px}.base-preview table{border-collapse:collapse;width:100%}.base-preview td,.base-preview th{border:1px solid #cbd5e1;padding:6px}.base-preview h1,.base-preview h2,.base-preview h3{margin:0 0 12px}</style></head><body><main class="page">${baseImage}${basePreview}${baseBorder}${elements}</main></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8" /><style>*{box-sizing:border-box}body{margin:0;background:#fff}.page{position:relative;overflow:hidden;break-after:page;page-break-after:always}.page:last-child{break-after:auto;page-break-after:auto}${generatedFrameCss}.base-preview{position:absolute;inset:0;overflow:hidden;background:#fff;padding:32px;font-family:Arial,Helvetica,sans-serif;color:#111827;line-height:1.45}.base-preview p{margin:0 0 10px}.base-preview table{border-collapse:collapse;width:100%}.base-preview td,.base-preview th{border:1px solid #cbd5e1;padding:6px}.base-preview h1,.base-preview h2,.base-preview h3{margin:0 0 12px}</style></head><body>${pageHtml}</body></html>`;
+}
+
+function buildRenderPages(layout: TemplateLayout, width: number, height: number, background: string | null) {
+  const hasPageImages = layout.basePages?.some((page) => Boolean(page.imageDataUrl));
+  const hasMultiPageElements = layout.elements.some((element) => (element.pageIndex ?? 0) > 0);
+  const sourcePages = layout.basePages?.length && (hasPageImages || hasMultiPageElements)
+    ? layout.basePages
+    : [{ index: 0, width, height, imageDataUrl: layout.baseImageDataUrl ?? background ?? undefined, border: layout.basePageBorder }];
+  const pages = sourcePages.map((page, index) => ({
+    index: page.index ?? index,
+    width: page.width || width,
+    height: page.height || height,
+    background: page.imageDataUrl ?? (index === 0 ? background ?? layout.baseImageDataUrl ?? undefined : undefined),
+    border: page.border ?? (index === 0 ? layout.basePageBorder : undefined),
+  }));
+  const maxPageIndex = Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0));
+
+  for (let index = pages.length; index <= maxPageIndex; index += 1) {
+    pages.push({ index, width, height, background: undefined, border: undefined });
+  }
+
+  return pages.sort((a, b) => a.index - b.index);
 }
 
 function justify(align: "left" | "center" | "right") {
@@ -511,6 +538,10 @@ function justify(align: "left" | "center" | "right") {
 
 function isNativeDocxBaseLayout(layout: TemplateLayout) {
   return layout.baseDocumentMode !== "editable" && Boolean(layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl);
+}
+
+function parseRenderLayout(layout: unknown) {
+  return normalizeVisualDocxLayout(templateLayoutSchema.parse(layout));
 }
 
 function escapeHtml(value: string) {

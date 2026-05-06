@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { getTemplateVariableLabel } from "@/lib/template-variable-fields";
 import { isSystemCertificateVariableKey } from "@/lib/verification-code";
 
 export const templateElementSchema = z.object({
@@ -10,6 +11,7 @@ export const templateElementSchema = z.object({
   variableRequired: z.boolean().default(true),
   x: z.number().default(80),
   y: z.number().default(80),
+  pageIndex: z.number().int().nonnegative().optional(),
   width: z.number().default(260),
   height: z.number().default(56),
   fontSize: z.number().default(28),
@@ -34,9 +36,19 @@ export const templatePageBorderSchema = z.object({
   inset: z.number().default(0),
 });
 
+export const templateLayoutPageSchema = z.object({
+  index: z.number().int().nonnegative().optional(),
+  width: z.number().default(1123),
+  height: z.number().default(794),
+  orientation: z.enum(["landscape", "portrait"]).default("landscape"),
+  imageDataUrl: z.string().optional(),
+  border: templatePageBorderSchema.optional(),
+});
+
 export const templateLayoutSchema = z.object({
   elements: z.array(templateElementSchema).default([]),
   variableDefinitions: z.array(templateVariableDefinitionSchema).optional(),
+  basePages: z.array(templateLayoutPageSchema).optional(),
   baseDocumentMode: z.enum(["native", "editable"]).optional(),
   baseFileName: z.string().optional(),
   baseFileType: z.string().optional(),
@@ -54,6 +66,7 @@ export type TemplateElement = z.infer<typeof templateElementSchema>;
 export type TemplateLayout = z.infer<typeof templateLayoutSchema>;
 export type TemplateVariableDefinition = z.infer<typeof templateVariableDefinitionSchema>;
 export type TemplatePageBorder = z.infer<typeof templatePageBorderSchema>;
+export type TemplateLayoutPage = z.infer<typeof templateLayoutPageSchema>;
 
 export function extractVariables(layout: TemplateLayout) {
   const variables = new Map<string, { label: string; required: boolean }>();
@@ -113,24 +126,7 @@ export function extractVariables(layout: TemplateLayout) {
 }
 
 export function labelFromKey(key: string) {
-  const normalizedKey = normalizeVariableKey(key);
-
-  if (
-    normalizedKey === "data_extenso" ||
-    normalizedKey === "data_extensa" ||
-    normalizedKey === "data_por_extenso" ||
-    normalizedKey === "data_por_extensa"
-  ) {
-    return "Data por Extenso";
-  }
-
-  if (normalizedKey === "nome" || normalizedKey === "name" || normalizedKey === "aluno") {
-    return "Aluno";
-  }
-
-  return key
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return getTemplateVariableLabel({ key: normalizeVariableKey(key) });
 }
 
 export function normalizeVariableKey(value: string) {
@@ -260,6 +256,7 @@ export function uploadedBaseLayout({
   renderEngine,
   imageDataUrl,
   imageEngine,
+  pages,
   elements,
   pageBorder,
   baseDocumentMode,
@@ -273,12 +270,14 @@ export function uploadedBaseLayout({
   renderEngine?: string;
   imageDataUrl?: string;
   imageEngine?: string;
+  pages?: TemplateLayoutPage[];
   elements?: TemplateElement[];
   pageBorder?: TemplatePageBorder;
   baseDocumentMode?: TemplateLayout["baseDocumentMode"];
 }): TemplateLayout {
   return {
     baseDocumentMode,
+    basePages: pages,
     baseFileName: fileName,
     baseFileType: fileType,
     baseFileDataUrl: dataUrl,
@@ -293,6 +292,36 @@ export function uploadedBaseLayout({
   };
 }
 
+export function normalizeVisualDocxLayout(layout: TemplateLayout): TemplateLayout {
+  if (!shouldNormalizeVisualDocxLayout(layout)) return layout;
+
+  const variableDefinitions = collectLayoutVariableDefinitions(layout);
+
+  return {
+    ...layout,
+    baseDocumentMode: "native",
+    elements: [],
+    variableDefinitions: variableDefinitions.length ? variableDefinitions : layout.variableDefinitions,
+  };
+}
+
+export function shouldNormalizeVisualDocxLayout(layout: TemplateLayout) {
+  return (
+    layout.baseDocumentMode === "editable" &&
+    isDocxBaseLayout(layout) &&
+    Boolean(layout.baseFileDataUrl) &&
+    (hasVisualBasePreview(layout) || Boolean(layout.basePreviewHtml) || layout.elements.length > 0)
+  );
+}
+
+export function hasVisualBasePreview(layout: TemplateLayout) {
+  return Boolean(
+    layout.baseRenderDataUrl ||
+      layout.baseImageDataUrl ||
+      layout.basePages?.some((page) => Boolean(page.imageDataUrl)),
+  );
+}
+
 export function isDefaultStarterLayout(layout: TemplateLayout) {
   const ids = layout.elements.map((element) => element.id).sort();
   return ids.join(",") === "body,qr,recipient,title";
@@ -300,4 +329,58 @@ export function isDefaultStarterLayout(layout: TemplateLayout) {
 
 export function shouldUseBasePreviewVariables(layout: TemplateLayout) {
   return layout.baseDocumentMode !== "editable";
+}
+
+function isDocxBaseLayout(layout: TemplateLayout) {
+  const fileType = layout.baseFileType?.toLowerCase() ?? "";
+  const fileName = layout.baseFileName?.toLowerCase() ?? "";
+  const dataUrl = layout.baseFileDataUrl?.toLowerCase() ?? "";
+
+  return (
+    fileType.includes("wordprocessingml") ||
+    fileType.includes("officedocument") ||
+    fileName.endsWith(".docx") ||
+    dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml")
+  );
+}
+
+function collectLayoutVariableDefinitions(layout: TemplateLayout) {
+  const variables = new Map<string, { label: string; required: boolean }>();
+
+  for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
+    if (!isSystemCertificateVariableKey(key)) {
+      variables.set(key, { label: labelFromKey(key), required: true });
+    }
+  }
+
+  for (const element of layout.elements) {
+    for (const key of extractVariableKeys(element.content)) {
+      if (!isSystemCertificateVariableKey(key) && !variables.has(key)) {
+        variables.set(key, { label: labelFromKey(key), required: true });
+      }
+    }
+  }
+
+  for (const definition of layout.variableDefinitions ?? []) {
+    if (!definition.key || isSystemCertificateVariableKey(definition.key)) continue;
+    variables.set(definition.key, {
+      label: definition.label?.trim() || labelFromKey(definition.key),
+      required: definition.required,
+    });
+  }
+
+  for (const element of layout.elements) {
+    if (element.type !== "variable" || !element.variableKey) continue;
+    if (isSystemCertificateVariableKey(element.variableKey)) continue;
+    variables.set(element.variableKey, {
+      label: element.variableLabel?.trim() || labelFromKey(element.variableKey),
+      required: element.variableRequired,
+    });
+  }
+
+  return [...variables.entries()].map(([key, variable]) => ({
+    key,
+    label: variable.label,
+    required: variable.required,
+  }));
 }

@@ -26,21 +26,25 @@ export function UploadTemplateButton() {
       const dataUrl = await readFile(file);
       const fileType = file.type || guessFileType(file.name);
       const extracted = await extractDocumentPreview(file);
+      if (extracted.converterOffline) {
+        alert("Aviso: O servico de conversao de documentos (Gotenberg/LibreOffice) parece estar indisponivel. Um preview de fallback local sera utilizado, mas pode apresentar diferencas visuais. Configure GOTENBERG_URL no servidor.");
+      }
       const pagePreset = extracted.page ?? { width: 1123, height: 794, orientation: "landscape" };
-      const isEditableDocx = fileType.includes("wordprocessingml") && extracted.editable && extracted.elements.length > 0;
+      const isDocxFile = fileType.includes("wordprocessingml");
       const layout = uploadedBaseLayout({
         fileName: file.name,
         fileType,
         dataUrl,
         previewHtml: extracted.previewHtml,
-        renderDataUrl: isEditableDocx ? undefined : extracted.renderDataUrl,
-        renderFileType: isEditableDocx ? undefined : extracted.renderFileType,
-        renderEngine: isEditableDocx ? undefined : extracted.renderEngine,
-        imageDataUrl: isEditableDocx ? undefined : extracted.imageDataUrl,
-        imageEngine: isEditableDocx ? undefined : extracted.imageEngine,
-        elements: extracted.elements,
+        renderDataUrl: extracted.renderDataUrl,
+        renderFileType: extracted.renderFileType,
+        renderEngine: extracted.renderEngine,
+        imageDataUrl: extracted.imageDataUrl,
+        imageEngine: extracted.imageEngine,
+        pages: extracted.pages,
+        elements: [],
         pageBorder: extracted.page?.border,
-        baseDocumentMode: isEditableDocx ? "editable" : "native",
+        baseDocumentMode: isDocxFile ? "native" : undefined,
       });
       const draft: TemplateImportDraft = {
         name: file.name.replace(/\.[^.]+$/, ""),

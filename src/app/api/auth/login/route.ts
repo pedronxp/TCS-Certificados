@@ -2,32 +2,77 @@ import { NextResponse } from "next/server";
 import { compare } from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { createSession } from "@/lib/auth";
+import {
+  buildRateLimitHeaders,
+  buildRateLimitKey,
+  clearRateLimit,
+  getClientIp,
+  getRateLimitStatus,
+  recordRateLimitFailure,
+} from "@/lib/rate-limit";
 
 const MAX_LOGIN_ATTEMPTS = 5;
+const MAX_LOGIN_IP_ATTEMPTS = 50;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+const LOGIN_RATE_LIMIT_ACTION = "auth.login";
+const LOGIN_IP_RATE_LIMIT_ACTION = "auth.login.ip";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const email = String(body.email ?? "").toLowerCase().trim();
     const password = String(body.password ?? "");
-    const attemptKey = loginAttemptKey(request, email);
+    const clientIp = getClientIp(request.headers);
+    const attemptKey = buildRateLimitKey(clientIp, email || "empty");
 
-    if (isLoginBlocked(attemptKey)) {
+    const [accountRateLimit, ipRateLimit] = await Promise.all([
+      getRateLimitStatus({
+        action: LOGIN_RATE_LIMIT_ACTION,
+        key: attemptKey,
+        limit: MAX_LOGIN_ATTEMPTS,
+        windowMs: LOGIN_WINDOW_MS,
+      }),
+      getRateLimitStatus({
+        action: LOGIN_IP_RATE_LIMIT_ACTION,
+        key: clientIp,
+        limit: MAX_LOGIN_IP_ATTEMPTS,
+        windowMs: LOGIN_WINDOW_MS,
+      }),
+    ]);
+
+    let blockedRateLimit: typeof accountRateLimit | null = null;
+    if (!accountRateLimit.allowed) {
+      blockedRateLimit = accountRateLimit;
+    } else if (!ipRateLimit.allowed) {
+      blockedRateLimit = ipRateLimit;
+    }
+    if (blockedRateLimit) {
       return NextResponse.json(
         { error: "Muitas tentativas. Aguarde alguns minutos e tente novamente." },
-        { status: 429 },
+        { status: 429, headers: buildRateLimitHeaders(blockedRateLimit) },
       );
     }
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !(await compare(password, user.passwordHash))) {
-      recordFailedLogin(attemptKey);
-      return NextResponse.json({ error: "Credenciais inválidas." }, { status: 401 });
+      await Promise.all([
+        recordRateLimitFailure({
+          action: LOGIN_RATE_LIMIT_ACTION,
+          key: attemptKey,
+          limit: MAX_LOGIN_ATTEMPTS,
+          windowMs: LOGIN_WINDOW_MS,
+        }),
+        recordRateLimitFailure({
+          action: LOGIN_IP_RATE_LIMIT_ACTION,
+          key: clientIp,
+          limit: MAX_LOGIN_IP_ATTEMPTS,
+          windowMs: LOGIN_WINDOW_MS,
+        }),
+      ]);
+      return NextResponse.json({ error: "Credenciais invalidas." }, { status: 401 });
     }
 
-    loginAttempts.delete(attemptKey);
+    await clearRateLimit({ action: LOGIN_RATE_LIMIT_ACTION, key: attemptKey });
 
     await createSession({
       id: user.id,
@@ -40,38 +85,8 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Login failed", error);
     return NextResponse.json(
-      { error: "Não foi possível autenticar agora." },
+      { error: "Nao foi possivel autenticar agora." },
       { status: 503 },
     );
   }
-}
-
-function loginAttemptKey(request: Request, email: string) {
-  const forwardedFor = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const ip = forwardedFor || request.headers.get("x-real-ip") || "unknown";
-  return `${ip}:${email || "empty"}`;
-}
-
-function isLoginBlocked(key: string) {
-  const attempt = loginAttempts.get(key);
-  if (!attempt) return false;
-
-  if (attempt.resetAt <= Date.now()) {
-    loginAttempts.delete(key);
-    return false;
-  }
-
-  return attempt.count >= MAX_LOGIN_ATTEMPTS;
-}
-
-function recordFailedLogin(key: string) {
-  const now = Date.now();
-  const current = loginAttempts.get(key);
-
-  if (!current || current.resetAt <= now) {
-    loginAttempts.set(key, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
-    return;
-  }
-
-  current.count += 1;
 }
