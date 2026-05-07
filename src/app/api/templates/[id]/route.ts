@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { extractVariables, normalizeVisualDocxLayout, templateLayoutSchema } from "@/lib/certificate-layout";
+import { extractVariables, normalizeVisualDocxLayout, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
 import { prisma } from "@/lib/prisma";
 import { validateTemplatePayloadSize } from "@/lib/upload-limits";
 
@@ -31,7 +31,18 @@ export async function PUT(
     return NextResponse.json({ error: payloadError }, { status: 413 });
   }
 
-  const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse(body.layout));
+  const currentTemplate = await prisma.certificateTemplate.findUnique({
+    where: { id },
+    select: { background: true, layout: true },
+  });
+  if (!currentTemplate) {
+    return NextResponse.json({ error: "Modelo nÃ£o encontrado." }, { status: 404 });
+  }
+
+  const currentLayout = templateLayoutSchema.parse(currentTemplate.layout);
+  const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse(
+    mergeTemplateLayoutPatch(currentLayout, body.layout),
+  ));
   const variables = extractVariables(layout);
 
   const template = await prisma.certificateTemplate.update({
@@ -42,7 +53,9 @@ export async function PUT(
       width: Number(body.width ?? 1123),
       height: Number(body.height ?? 794),
       orientation: String(body.orientation ?? "landscape"),
-      background: body.background ? String(body.background) : null,
+      background: body.background === undefined
+        ? currentTemplate.background
+        : body.background ? String(body.background) : null,
       layout: layout as Prisma.InputJsonValue,
       variables: {
         deleteMany: {},
@@ -53,6 +66,68 @@ export async function PUT(
   });
 
   return NextResponse.json(template);
+}
+
+function mergeTemplateLayoutPatch(current: TemplateLayout, patchValue: unknown) {
+  if (!patchValue || typeof patchValue !== "object" || Array.isArray(patchValue)) {
+    return patchValue;
+  }
+
+  const patch = patchValue as Record<string, unknown>;
+  const merged: Record<string, unknown> = {
+    ...current,
+    ...patch,
+  };
+
+  if (Array.isArray(patch.basePages)) {
+    merged.basePages = patch.basePages.map((page, index) => {
+      const currentPage = current.basePages?.[index] ?? {};
+      return page && typeof page === "object" && !Array.isArray(page)
+        ? { ...currentPage, ...page }
+        : page;
+    });
+  }
+
+  if (Array.isArray(patch.baseAssets)) {
+    merged.baseAssets = mergeBaseAssetPatch(current.baseAssets ?? [], patch.baseAssets);
+  }
+
+  return merged;
+}
+
+function mergeBaseAssetPatch(
+  currentAssets: NonNullable<TemplateLayout["baseAssets"]>,
+  patchAssets: unknown[],
+) {
+  const currentByPath = new Map(currentAssets.map((asset) => [asset.path, asset]));
+  const seenPaths = new Set<string>();
+
+  for (const patchAsset of patchAssets) {
+    if (!patchAsset || typeof patchAsset !== "object" || Array.isArray(patchAsset)) continue;
+    const patch = patchAsset as Record<string, unknown>;
+    const path = typeof patch.path === "string" ? patch.path : "";
+    if (!path) continue;
+
+    const current = currentByPath.get(path);
+    if (current) {
+      currentByPath.set(path, {
+        ...current,
+        replacementDataUrl: typeof patch.replacementDataUrl === "string"
+          ? patch.replacementDataUrl
+          : current.replacementDataUrl,
+      });
+      seenPaths.add(path);
+      continue;
+    }
+
+    currentByPath.set(path, patch as NonNullable<TemplateLayout["baseAssets"]>[number]);
+    seenPaths.add(path);
+  }
+
+  return [
+    ...currentAssets.filter((asset) => !seenPaths.has(asset.path)),
+    ...[...currentByPath.values()].filter((asset) => seenPaths.has(asset.path)),
+  ];
 }
 
 export async function POST(

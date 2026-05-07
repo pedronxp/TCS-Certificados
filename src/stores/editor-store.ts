@@ -253,22 +253,31 @@ export const useEditorStore = create<EditorStore>()(
 
     /* ═══ Serialization ═══ */
 
-    toLayout: (): TemplateLayout => {
+    toLayout: (options = {}): TemplateLayout => {
       const s = get();
+      const compactBase = Boolean(options.compactBase);
       const layout: TemplateLayout = {
         elements: JSON.parse(JSON.stringify(s.elements)),
-        basePages: s.basePages.length > 0 ? JSON.parse(JSON.stringify(s.basePages)) : undefined,
+        basePages: s.basePages.length > 0
+          ? compactBase
+            ? s.basePages.map(compactBasePage)
+            : JSON.parse(JSON.stringify(s.basePages))
+          : undefined,
         baseDocumentMode: s.baseDocumentMode ?? undefined,
         baseFileName: s.baseFileName ?? undefined,
         baseFileType: s.baseFileType ?? undefined,
-        baseFileDataUrl: s.baseFileDataUrl ?? undefined,
-        basePreviewHtml: s.basePreviewHtml ?? undefined,
-        baseRenderDataUrl: s.baseRenderDataUrl ?? undefined,
+        baseFileDataUrl: compactBase ? undefined : s.baseFileDataUrl ?? undefined,
+        basePreviewHtml: compactBase ? undefined : s.basePreviewHtml ?? undefined,
+        baseRenderDataUrl: compactBase ? undefined : s.baseRenderDataUrl ?? undefined,
         baseRenderFileType: s.baseRenderFileType ?? undefined,
         baseRenderEngine: s.baseRenderEngine ?? undefined,
-        baseImageDataUrl: s.baseImageDataUrl ?? undefined,
+        baseImageDataUrl: compactBase ? undefined : s.baseImageDataUrl ?? undefined,
         baseImageEngine: s.baseImageEngine ?? undefined,
-        baseAssets: s.baseAssets.length > 0 ? JSON.parse(JSON.stringify(s.baseAssets)) : undefined,
+        baseAssets: s.baseAssets.length > 0
+          ? compactBase
+            ? compactBaseAssets(s.baseAssets)
+            : JSON.parse(JSON.stringify(s.baseAssets))
+          : undefined,
       };
       return layout;
     },
@@ -317,3 +326,22 @@ export const useEditorStore = create<EditorStore>()(
     },
   })),
 );
+
+function compactBasePage(page: NonNullable<TemplateLayout["basePages"]>[number]) {
+  const compacted = { ...page };
+  delete compacted.imageDataUrl;
+  return compacted;
+}
+
+function compactBaseAssets(baseAssets: TemplateLayout["baseAssets"]) {
+  const replacements = (baseAssets ?? [])
+    .filter((asset) => asset.path && asset.replacementDataUrl)
+    .map((asset) => ({
+      path: asset.path,
+      replacementDataUrl: asset.replacementDataUrl,
+    }));
+
+  return replacements.length
+    ? replacements as unknown as TemplateLayout["baseAssets"]
+    : undefined;
+}

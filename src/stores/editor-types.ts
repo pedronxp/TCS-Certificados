@@ -109,7 +109,7 @@ export interface HistoryActions {
 /* ─── Serialization ─── */
 export interface SerializationActions {
   /** Rebuild a TemplateLayout object from the current store state */
-  toLayout: () => TemplateLayout;
+  toLayout: (options?: { compactBase?: boolean }) => TemplateLayout;
   /** Hydrate the store from a TemplateLayout + document metadata */
   fromTemplate: (template: {
     id?: string;

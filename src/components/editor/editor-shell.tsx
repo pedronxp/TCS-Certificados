@@ -150,14 +150,15 @@ export function EditorShell({ initial }: EditorShellProps) {
 
     store.setSaving(true);
     try {
-      const layout = store.toLayout();
+      const isExistingTemplate = Boolean(store.id);
+      const layout = store.toLayout({ compactBase: isExistingTemplate });
       const body = {
         name: store.name,
         description: store.description || null,
         width: store.width,
         height: store.height,
         orientation: store.orientation,
-        background: store.background,
+        background: isExistingTemplate && isDataUrl(store.background) ? undefined : store.background,
         layout,
       };
 
@@ -204,6 +205,10 @@ export function EditorShell({ initial }: EditorShellProps) {
       </div>
     </div>
   );
+}
+
+function isDataUrl(value: string | null) {
+  return typeof value === "string" && value.startsWith("data:");
 }
 
 function mergeRenderedPages(
