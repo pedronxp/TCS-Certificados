@@ -22,12 +22,23 @@ export const templateElementSchema = z.object({
   italic: z.boolean().default(false),
   underline: z.boolean().default(false),
   lineHeight: z.number().default(1.15),
+  zIndex: z.number().int().optional(),
 });
 
 export const templateVariableDefinitionSchema = z.object({
   key: z.string(),
   label: z.string(),
   required: z.boolean().default(true),
+});
+
+export const templateBaseAssetSchema = z.object({
+  path: z.string(),
+  name: z.string(),
+  contentType: z.string(),
+  dataUrl: z.string(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+  replacementDataUrl: z.string().optional(),
 });
 
 export const templatePageBorderSchema = z.object({
@@ -60,6 +71,7 @@ export const templateLayoutSchema = z.object({
   baseImageDataUrl: z.string().optional(),
   baseImageEngine: z.string().optional(),
   basePageBorder: templatePageBorderSchema.optional(),
+  baseAssets: z.array(templateBaseAssetSchema).optional(),
 });
 
 export type TemplateElement = z.infer<typeof templateElementSchema>;
@@ -67,6 +79,7 @@ export type TemplateLayout = z.infer<typeof templateLayoutSchema>;
 export type TemplateVariableDefinition = z.infer<typeof templateVariableDefinitionSchema>;
 export type TemplatePageBorder = z.infer<typeof templatePageBorderSchema>;
 export type TemplateLayoutPage = z.infer<typeof templateLayoutPageSchema>;
+export type TemplateBaseAsset = z.infer<typeof templateBaseAssetSchema>;
 
 export function extractVariables(layout: TemplateLayout) {
   const variables = new Map<string, { label: string; required: boolean }>();
@@ -259,6 +272,7 @@ export function uploadedBaseLayout({
   pages,
   elements,
   pageBorder,
+  assets,
   baseDocumentMode,
 }: {
   fileName: string;
@@ -273,6 +287,7 @@ export function uploadedBaseLayout({
   pages?: TemplateLayoutPage[];
   elements?: TemplateElement[];
   pageBorder?: TemplatePageBorder;
+  assets?: TemplateBaseAsset[];
   baseDocumentMode?: TemplateLayout["baseDocumentMode"];
 }): TemplateLayout {
   return {
@@ -288,30 +303,23 @@ export function uploadedBaseLayout({
     baseImageDataUrl: imageDataUrl,
     baseImageEngine: imageEngine,
     basePageBorder: pageBorder,
+    baseAssets: assets,
     elements: elements ?? [],
   };
 }
 
 export function normalizeVisualDocxLayout(layout: TemplateLayout): TemplateLayout {
-  if (!shouldNormalizeVisualDocxLayout(layout)) return layout;
-
-  const variableDefinitions = collectLayoutVariableDefinitions(layout);
+  if (!isDocxBaseLayout(layout)) return layout;
 
   return {
     ...layout,
     baseDocumentMode: "native",
-    elements: [],
-    variableDefinitions: variableDefinitions.length ? variableDefinitions : layout.variableDefinitions,
+    elements: preserveManualNativeDocxElements(layout.elements),
   };
 }
 
-export function shouldNormalizeVisualDocxLayout(layout: TemplateLayout) {
-  return (
-    layout.baseDocumentMode === "editable" &&
-    isDocxBaseLayout(layout) &&
-    Boolean(layout.baseFileDataUrl) &&
-    (hasVisualBasePreview(layout) || Boolean(layout.basePreviewHtml) || layout.elements.length > 0)
-  );
+export function shouldNormalizeVisualDocxLayout() {
+  return true;
 }
 
 export function hasVisualBasePreview(layout: TemplateLayout) {
@@ -331,56 +339,39 @@ export function shouldUseBasePreviewVariables(layout: TemplateLayout) {
   return layout.baseDocumentMode !== "editable";
 }
 
+export function preserveManualNativeDocxElements(elements: TemplateElement[]) {
+  return elements.filter((element) => !isAutoExtractedDocxElement(element));
+}
+
 function isDocxBaseLayout(layout: TemplateLayout) {
   const fileType = layout.baseFileType?.toLowerCase() ?? "";
   const fileName = layout.baseFileName?.toLowerCase() ?? "";
   const dataUrl = layout.baseFileDataUrl?.toLowerCase() ?? "";
 
-  return (
+  return Boolean(
     fileType.includes("wordprocessingml") ||
-    fileType.includes("officedocument") ||
-    fileName.endsWith(".docx") ||
-    dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml")
+      fileType.includes("officedocument") ||
+      fileName.endsWith(".docx") ||
+      dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml") ||
+      (layout.baseDocumentMode && (layout.basePages?.length ?? 0) > 0),
   );
 }
 
-function collectLayoutVariableDefinitions(layout: TemplateLayout) {
-  const variables = new Map<string, { label: string; required: boolean }>();
+function isAutoExtractedDocxElement(element: TemplateElement) {
+  if (element.type === "qr") return false;
+  if (element.id.startsWith("watermark-")) return true;
 
-  for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
-    if (!isSystemCertificateVariableKey(key)) {
-      variables.set(key, { label: labelFromKey(key), required: true });
-    }
+  if ((element.type === "text" || element.type === "variable") && hasUuidPrefix(element.id, "text")) {
+    return true;
   }
 
-  for (const element of layout.elements) {
-    for (const key of extractVariableKeys(element.content)) {
-      if (!isSystemCertificateVariableKey(key) && !variables.has(key)) {
-        variables.set(key, { label: labelFromKey(key), required: true });
-      }
-    }
+  if (element.type === "image" && hasUuidPrefix(element.id, "image")) {
+    return true;
   }
 
-  for (const definition of layout.variableDefinitions ?? []) {
-    if (!definition.key || isSystemCertificateVariableKey(definition.key)) continue;
-    variables.set(definition.key, {
-      label: definition.label?.trim() || labelFromKey(definition.key),
-      required: definition.required,
-    });
-  }
+  return false;
+}
 
-  for (const element of layout.elements) {
-    if (element.type !== "variable" || !element.variableKey) continue;
-    if (isSystemCertificateVariableKey(element.variableKey)) continue;
-    variables.set(element.variableKey, {
-      label: element.variableLabel?.trim() || labelFromKey(element.variableKey),
-      required: element.variableRequired,
-    });
-  }
-
-  return [...variables.entries()].map(([key, variable]) => ({
-    key,
-    label: variable.label,
-    required: variable.required,
-  }));
+function hasUuidPrefix(id: string, prefix: string) {
+  return new RegExp(`^${prefix}-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`, "i").test(id);
 }

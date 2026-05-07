@@ -12,6 +12,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
+import { SensitiveDocumentInput } from "@/components/sensitive-document-input";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
@@ -208,9 +209,8 @@ export default async function ValidatePage({
                 <small className="public-field-hint">
                   Use a mesma numeracao informada no certificado. Pontos, tracos e espacos sao opcionais.
                 </small>
-                <input
+                <SensitiveDocumentInput
                   name="documento"
-                  type="text"
                   required
                   autoComplete="off"
                   inputMode="text"

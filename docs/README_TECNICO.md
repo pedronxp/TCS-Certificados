@@ -64,7 +64,8 @@ Usuário autenticado
 | `mammoth` | Extração de conteúdo de DOCX para preview. |
 | `csv-parse` + `xlsx` | Leitura de CSV/XLSX em lote. |
 | Playwright | Suporte para renderização quando o Chromium está instalado. |
-| Microsoft Graph / CloudConvert / Gotenberg / LibreOffice | Conversão DOCX para PDF no preview e na emissão. |
+| Gotenberg / LibreOffice | Conversão DOCX para PDF no preview e na emissão. |
+| Collabora Online | Editor DOCX no navegador usando LibreOffice via WOPI. |
 
 ## Estrutura de Pastas
 
@@ -207,7 +208,7 @@ O DOCX pode conter placeholders como:
 {{curso}}
 ```
 
-Quando esses placeholders existem, o sistema consegue detectá-los e usá-los como variáveis do formulário. Se houver Microsoft Graph ou CloudConvert configurado, o editor preserva o DOCX como base visual convertida em PDF, sem depender de Docker.
+Quando esses placeholders existem, o sistema consegue detectá-los e usá-los como variáveis do formulário. O editor preserva o DOCX como base nativa e usa Gotenberg/LibreOffice para gerar uma prévia fiel em PDF.
 
 ### Imagem
 
@@ -331,7 +332,7 @@ O PDF é a saída principal, adequada para preservação visual.
 
 Quando há base PDF, o sistema usa o documento original como fundo. Textos variáveis e QR Code são sobrepostos com base nas posições configuradas no editor.
 
-Quando a base original é DOCX, a conversão para PDF tenta, nesta ordem: Microsoft Graph, CloudConvert, Gotenberg e LibreOffice local.
+Quando a base original é DOCX, a conversão para PDF tenta Gotenberg e, em desenvolvimento local, LibreOffice instalado como fallback.
 
 ### DOCX
 

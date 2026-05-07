@@ -51,7 +51,7 @@ test("editable DOCX layouts expose variables from editable elements only", () =>
   ]);
 });
 
-test("visual editable DOCX layouts normalize to native base variables", () => {
+test("visual DOCX layouts normalize to native mode and keep manual overlays", () => {
   const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse({
     baseDocumentMode: "editable",
     baseFileName: "modelo.docx",
@@ -87,12 +87,12 @@ test("visual editable DOCX layouts normalize to native base variables", () => {
   }));
 
   assert.equal(layout.baseDocumentMode, "native");
-  assert.deepEqual(layout.elements, []);
-  assert.deepEqual(extractVariables(layout), [
+  assert.equal(layout.elements.length, 2);
+  assert.deepEqual(sortVariables(extractVariables(layout)), [
     {
-      key: "nome",
-      label: "Aluno",
-      required: false,
+      key: "cpf",
+      label: "CPF",
+      required: true,
     },
     {
       key: "curso",
@@ -100,14 +100,14 @@ test("visual editable DOCX layouts normalize to native base variables", () => {
       required: true,
     },
     {
-      key: "cpf",
-      label: "CPF",
-      required: true,
+      key: "nome",
+      label: "Aluno",
+      required: false,
     },
   ]);
 });
 
-test("legacy editable DOCX layouts with source file normalize to native base", () => {
+test("legacy editable DOCX layouts with source file normalize to native mode", () => {
   const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse({
     baseDocumentMode: "editable",
     baseFileName: "modelo.docx",
@@ -126,7 +126,7 @@ test("legacy editable DOCX layouts with source file normalize to native base", (
   }));
 
   assert.equal(layout.baseDocumentMode, "native");
-  assert.deepEqual(layout.elements, []);
+  assert.equal(layout.elements.length, 1);
   assert.deepEqual(extractVariables(layout), [
     {
       key: "nome",
@@ -134,6 +134,37 @@ test("legacy editable DOCX layouts with source file normalize to native base", (
       required: true,
     },
   ]);
+});
+
+test("native DOCX normalization removes auto-extracted preview elements", () => {
+  const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse({
+    baseDocumentMode: "editable",
+    baseFileName: "modelo.docx",
+    baseFileType: docxMimeType,
+    baseFileDataUrl: `data:${docxMimeType};base64,AAAA`,
+    basePreviewHtml: "Certificado {{nome}}",
+    elements: [
+      {
+        id: "text-11111111-1111-4111-8111-111111111111",
+        type: "variable",
+        content: "{{nome}}",
+        variableKey: "nome",
+      },
+      {
+        id: "image-11111111-1111-4111-8111-111111111111",
+        type: "image",
+        content: "data:image/png;base64,AAAA",
+      },
+      {
+        id: "manual-qr",
+        type: "qr",
+        content: "",
+      },
+    ],
+  }));
+
+  assert.equal(layout.baseDocumentMode, "native");
+  assert.deepEqual(layout.elements.map((element) => element.id), ["manual-qr"]);
 });
 
 test("parses legacy text elements with typography defaults", () => {
@@ -171,3 +202,7 @@ test("parses multipage template metadata and element page indexes", () => {
   assert.equal(layout.basePages?.length, 2);
   assert.equal(layout.elements[0].pageIndex, 1);
 });
+
+function sortVariables<T extends { key: string }>(variables: T[]) {
+  return [...variables].sort((a, b) => a.key.localeCompare(b.key));
+}

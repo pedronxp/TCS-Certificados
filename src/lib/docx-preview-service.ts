@@ -4,7 +4,7 @@ import mammoth from "mammoth";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { PDFDocument } from "pdf-lib";
-import { extractVariableKeys, type TemplateElement, type TemplatePageBorder } from "@/lib/certificate-layout";
+import { extractVariableKeys, type TemplateBaseAsset, type TemplateElement, type TemplatePageBorder } from "@/lib/certificate-layout";
 import { convertDocxToPdfWithGotenberg } from "@/lib/gotenberg";
 import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
 
@@ -41,36 +41,50 @@ export type DocxPreviewResult = {
   variables: string[];
   editable: boolean;
   elements: TemplateElement[];
+  assets: TemplateBaseAsset[];
   /** Indica se o serviço de conversão está offline */
   converterOffline?: boolean;
 };
 
 const WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const PDF_POINTS_TO_CSS_PIXELS = 4 / 3;
 
-export async function buildDocxPreview(buffer: Buffer): Promise<DocxPreviewResult> {
+export async function buildDocxPreview(
+  buffer: Buffer,
+  options: { assets?: TemplateBaseAsset[] } = {},
+): Promise<DocxPreviewResult> {
+  const workingBuffer = await applyDocxAssetReplacements(buffer, options.assets);
   const [rawText, page] = await Promise.all([
-    extractRawText(buffer),
-    extractDocxPage(buffer),
+    extractRawText(workingBuffer),
+    extractDocxPage(workingBuffer),
   ]);
 
   // ── Motor primário: Gotenberg (Open Source) ──
-  const gotenbergPdf = await convertDocxToPdfWithGotenberg(buffer);
+  const gotenbergPdf = await convertDocxToPdfWithGotenberg(workingBuffer);
 
   // ── Fallback dev: LibreOffice local ──
-  const libreOfficePdf = gotenbergPdf ? null : await convertDocxToPdfBuffer(buffer);
+  const libreOfficePdf = gotenbergPdf ? null : await convertDocxToPdfBuffer(workingBuffer);
 
   const nativePdf = gotenbergPdf ?? libreOfficePdf;
+  const assets = mergeAssetReplacements(
+    await extractDocxMediaAssets(buffer),
+    options.assets,
+  );
 
   // ── Fallback visual: docx-preview.js via Playwright ──
-  const visualPreview = nativePdf ? null : await renderDocxPagePreviewSafely(buffer, page);
-  const fallbackImageDataUrl = visualPreview?.imageDataUrl ?? "";
+  const editablePreview = await renderDocxPagePreviewSafely(workingBuffer, page);
+  const fallbackImageDataUrl = editablePreview.imageDataUrl;
 
-  const pdfPages = nativePdf ? await extractPdfPages(nativePdf, page) : [];
-  const pages: DocxPreviewPage[] = visualPreview?.pages?.length
-    ? visualPreview.pages
+  const pdfPages = nativePdf
+    ? mergePdfPagesWithFallbackImages(await extractPdfPages(nativePdf, page), editablePreview.pages)
+    : [];
+  const renderedPages: DocxPreviewPage[] = !nativePdf && editablePreview.pages.length
+    ? editablePreview.pages
     : nativePdf
       ? pdfPages
       : [{ ...page, index: 0, imageDataUrl: fallbackImageDataUrl || undefined }];
+  const normalizedPages = normalizeEditablePreviewPages(renderedPages, page, editablePreview.elements);
+  const pages = nativePdf ? normalizedPages : trimTrailingEditablePages(normalizedPages, []);
 
   const renderDataUrl = nativePdf
     ? `data:application/pdf;base64,${nativePdf.toString("base64")}`
@@ -99,8 +113,26 @@ export async function buildDocxPreview(buffer: Buffer): Promise<DocxPreviewResul
     variables: extractVariableKeys(rawText),
     editable: false,
     elements: [],
+    assets,
     converterOffline,
   };
+}
+
+export async function applyDocxAssetReplacements(
+  buffer: Buffer,
+  assets: TemplateBaseAsset[] | undefined,
+) {
+  const replacements = (assets ?? []).filter((asset) => asset.path && asset.replacementDataUrl);
+  if (replacements.length === 0) return buffer;
+
+  const zip = await JSZip.loadAsync(buffer);
+
+  for (const asset of replacements) {
+    if (!asset.replacementDataUrl || !zip.file(asset.path)) continue;
+    zip.file(asset.path, dataUrlToBuffer(asset.replacementDataUrl));
+  }
+
+  return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
 }
 
 async function renderDocxPagePreviewSafely(buffer: Buffer, page: DocxPreviewPage) {
@@ -110,6 +142,134 @@ async function renderDocxPagePreviewSafely(buffer: Buffer, page: DocxPreviewPage
     console.warn("Preview visual DOCX indisponivel; usando preview no navegador.", error);
     return { imageDataUrl: "", pages: [{ ...page, index: 0 }], elements: [] as TemplateElement[] };
   }
+}
+
+function normalizeEditablePreviewPages(
+  pages: DocxPreviewPage[],
+  fallbackPage: DocxPreviewPage,
+  elements: TemplateElement[],
+) {
+  if (pages.length !== 1 || elements.length === 0) return pages;
+
+  const [singlePage] = pages;
+  const fallbackHeight = Math.max(1, fallbackPage.height);
+  const maxElementBottom = elements.reduce(
+    (max, element) => Math.max(max, element.y + element.height),
+    singlePage.height,
+  );
+
+  if (maxElementBottom <= fallbackHeight * 1.1) return pages;
+
+  const pageCount = Math.max(1, Math.ceil(maxElementBottom / fallbackHeight));
+
+  return Array.from({ length: pageCount }, (_, index) => ({
+    ...fallbackPage,
+    index,
+    border: fallbackPage.border ?? singlePage.border,
+    imageDataUrl: undefined,
+  }));
+}
+
+function trimTrailingEditablePages(
+  pages: DocxPreviewPage[],
+  elements: TemplateElement[],
+) {
+  if (pages.length <= 1 || elements.length === 0) return pages;
+
+  const maxPageIndex = Math.max(0, ...elements.map((element) => element.pageIndex ?? 0));
+  return pages.filter((page, index) => (page.index ?? index) <= maxPageIndex);
+}
+
+function mergePdfPagesWithFallbackImages(
+  pdfPages: DocxPreviewPage[],
+  fallbackPages: DocxPreviewPage[],
+) {
+  return pdfPages.map((page, index) => ({
+    ...page,
+    imageDataUrl: fallbackPages[index]?.imageDataUrl,
+  }));
+}
+
+async function extractDocxMediaAssets(buffer: Buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const mediaFiles = Object.keys(zip.files).filter((name) => /^word\/media\/[^/]+\.(png|jpe?g)$/i.test(name));
+  const images: TemplateBaseAsset[] = [];
+
+  for (const fileName of mediaFiles) {
+    const file = zip.file(fileName);
+    if (!file) continue;
+
+    const imageBuffer = await file.async("nodebuffer");
+    const size = readImageSize(imageBuffer);
+    if (!size) continue;
+
+    const contentType = imageMimeType(fileName);
+    images.push({
+      path: fileName,
+      name: fileName.split("/").at(-1) ?? fileName,
+      contentType,
+      dataUrl: `data:${contentType};base64,${imageBuffer.toString("base64")}`,
+      ...size,
+    });
+  }
+
+  return images;
+}
+
+function mergeAssetReplacements(
+  assets: TemplateBaseAsset[],
+  replacements: TemplateBaseAsset[] | undefined,
+) {
+  if (!replacements?.length) return assets;
+  const replacementMap = new Map(replacements.map((asset) => [asset.path, asset.replacementDataUrl]));
+
+  return assets.map((asset) => ({
+    ...asset,
+    replacementDataUrl: replacementMap.get(asset.path) || asset.replacementDataUrl,
+  }));
+}
+
+function readImageSize(buffer: Buffer) {
+  const pngSize = readPngSize(buffer);
+  if (pngSize) return pngSize;
+  return readJpegSize(buffer);
+}
+
+function readPngSize(buffer: Buffer) {
+  if (buffer.length < 24 || buffer.toString("ascii", 1, 4) !== "PNG") return null;
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
+
+function readJpegSize(buffer: Buffer) {
+  let offset = 2;
+
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) return null;
+    const marker = buffer[offset + 1];
+    const length = buffer.readUInt16BE(offset + 2);
+
+    if (marker >= 0xc0 && marker <= 0xc3) {
+      return {
+        width: buffer.readUInt16BE(offset + 7),
+        height: buffer.readUInt16BE(offset + 5),
+      };
+    }
+
+    offset += 2 + length;
+  }
+
+  return null;
+}
+
+function imageMimeType(fileName: string) {
+  return fileName.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+}
+
+function dataUrlToBuffer(dataUrl: string) {
+  return Buffer.from(dataUrl.split(",").at(-1) ?? "", "base64");
 }
 
 async function extractRawText(buffer: Buffer) {
@@ -195,19 +355,64 @@ async function renderDocxPagePreview(buffer: Buffer, page: DocxPreviewPage) {
     const renderError = await tab.evaluate(() => document.body.dataset.renderError ?? "");
     if (renderError) throw new Error(renderError);
 
+    const screenshotBounds = await tab.evaluate(() => {
+      const root = document.documentElement;
+      const body = document.body;
+
+      return {
+        width: Math.ceil(Math.max(root.scrollWidth, body.scrollWidth, root.clientWidth, body.clientWidth)),
+        height: Math.ceil(Math.max(root.scrollHeight, body.scrollHeight, root.clientHeight, body.clientHeight)),
+      };
+    });
+    await tab.setViewportSize({
+      width: Math.min(16384, Math.max(page.width, screenshotBounds.width)),
+      height: Math.min(16384, Math.max(page.height, screenshotBounds.height)),
+    });
+
     const renderedPages = await tab.evaluate(extractRenderedDocxPages, page);
     const elements = await tab.evaluate(extractEditableElementsFromRenderedDocx, page.width);
     const pages: DocxPreviewPage[] = [];
 
     for (const renderedPage of renderedPages) {
+      if (renderedPages.length === 1 && renderedPage.height > page.height * 1.2) {
+        const pageCount = Math.max(1, Math.ceil(renderedPage.height / page.height));
+
+        for (let index = 0; index < pageCount; index += 1) {
+          const clipY = renderedPage.y + index * page.height;
+          const remainingHeight = Math.max(1, renderedPage.y + renderedPage.height - clipY);
+          const clipHeight = Math.min(page.height, remainingHeight);
+          const clip = clampScreenshotClip({
+            x: renderedPage.x,
+            y: clipY,
+            width: renderedPage.width,
+            height: clipHeight,
+          }, screenshotBounds);
+          if (!clip) continue;
+
+          const screenshot = await tab.screenshot({
+            type: "png",
+            clip,
+          });
+
+          pages.push({
+            index,
+            width: renderedPage.width,
+            height: page.height,
+            orientation: renderedPage.width >= page.height ? "landscape" : "portrait",
+            border: renderedPage.border,
+            imageDataUrl: `data:image/png;base64,${Buffer.from(screenshot).toString("base64")}`,
+          });
+        }
+
+        continue;
+      }
+
+      const clip = clampScreenshotClip(renderedPage, screenshotBounds);
+      if (!clip) continue;
+
       const screenshot = await tab.screenshot({
         type: "png",
-        clip: {
-          x: Math.max(0, Math.floor(renderedPage.x)),
-          y: Math.max(0, Math.floor(renderedPage.y)),
-          width: Math.max(1, Math.ceil(renderedPage.width)),
-          height: Math.max(1, Math.ceil(renderedPage.height)),
-        },
+        clip,
       });
 
       pages.push({
@@ -291,6 +496,21 @@ function extractRenderedDocxPages(fallbackPage: DocxPreviewPage) {
   });
 }
 
+function clampScreenshotClip(
+  rect: { x: number; y: number; width: number; height: number },
+  bounds: { width: number; height: number },
+) {
+  const x = Math.max(0, Math.floor(rect.x));
+  const y = Math.max(0, Math.floor(rect.y));
+  const maxWidth = Math.max(0, bounds.width - x);
+  const maxHeight = Math.max(0, bounds.height - y);
+  const width = Math.min(Math.max(1, Math.ceil(rect.width)), maxWidth);
+  const height = Math.min(Math.max(1, Math.ceil(rect.height)), maxHeight);
+
+  if (width < 1 || height < 1) return null;
+  return { x, y, width, height };
+}
+
 function extractEditableElementsFromRenderedDocx(pageWidth: number): TemplateElement[] {
   const elements: TemplateElement[] = [];
   const pageElements = Array.from(document.querySelectorAll<HTMLElement>("section.docx-render"));
@@ -305,6 +525,16 @@ function extractEditableElementsFromRenderedDocx(pageWidth: number): TemplateEle
       if (!rect || rect.width < 6 || rect.height < 6) continue;
       const content = image.getAttribute("src") || image.src;
       if (!content) continue;
+      addImageElement(elements, content, rect, currentPageWidth, pageIndex);
+    }
+
+    for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("div,span"))) {
+      if (graphic.textContent?.trim()) continue;
+      const content = extractCssImageUrl(window.getComputedStyle(graphic).backgroundImage);
+      if (!content) continue;
+
+      const rect = relativeRect(graphic, pageRect);
+      if (!rect || rect.width < 6 || rect.height < 6) continue;
       addImageElement(elements, content, rect, currentPageWidth, pageIndex);
     }
 
@@ -364,9 +594,10 @@ function extractEditableElementsFromRenderedDocx(pageWidth: number): TemplateEle
     const y = Math.max(0, Math.round(rect.y));
     const width = clamp(Math.round(rect.width), 8, widthLimit);
     const height = Math.max(8, Math.round(rect.height));
+    const prefix = isWatermarkRect(rect, widthLimit) ? "watermark" : "image";
 
     target.push({
-      id: randomId("image"),
+      id: randomId(prefix),
       type: "image",
       content,
       variableRequired: true,
@@ -384,6 +615,19 @@ function extractEditableElementsFromRenderedDocx(pageWidth: number): TemplateEle
       underline: false,
       lineHeight: 1.15,
     });
+  }
+
+  function isWatermarkRect(
+    rect: { width: number; height: number },
+    widthLimit: number,
+  ) {
+    return rect.width >= widthLimit * 0.45 || rect.height >= 260;
+  }
+
+  function extractCssImageUrl(value: string) {
+    if (!value || value === "none") return "";
+    const match = value.match(/url\((['"]?)(.*?)\1\)/i);
+    return match?.[2] ?? "";
   }
 
   function relativeRect(element: Element, rootRect: DOMRect) {
@@ -485,8 +729,8 @@ async function extractPdfPages(pdfBuffer: Buffer, fallbackPage: DocxPreviewPage)
     const document = await PDFDocument.load(pdfBuffer);
     return document.getPages().map((page, index) => {
       const size = page.getSize();
-      const width = Math.max(1, Math.round(size.width));
-      const height = Math.max(1, Math.round(size.height));
+      const width = pdfPointsToCssPixels(size.width);
+      const height = pdfPointsToCssPixels(size.height);
 
       return {
         index,
@@ -499,6 +743,10 @@ async function extractPdfPages(pdfBuffer: Buffer, fallbackPage: DocxPreviewPage)
   } catch {
     return [{ ...fallbackPage, index: 0 }];
   }
+}
+
+function pdfPointsToCssPixels(value: number) {
+  return Math.max(1, Math.round(value * PDF_POINTS_TO_CSS_PIXELS));
 }
 
 function rawTextToPreviewHtml(value: string) {

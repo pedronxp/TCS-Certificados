@@ -1500,6 +1500,56 @@ body {
   line-height: 1.4;
 }
 
+.sensitive-input {
+  position: relative;
+}
+
+.field .sensitive-input-control {
+  padding-right: 3rem;
+  letter-spacing: 0;
+}
+
+.sensitive-input-control-blurred:not(:placeholder-shown) {
+  color: transparent;
+  text-shadow: 0 0 8px rgb(15 23 42 / 0.72);
+  caret-color: var(--text-primary);
+}
+
+.sensitive-input-control-blurred:not(:placeholder-shown)::selection {
+  color: transparent;
+  background: rgb(37 99 235 / 0.18);
+}
+
+.sensitive-input-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.375rem;
+  display: inline-flex;
+  width: 2.25rem;
+  height: 2.25rem;
+  transform: translateY(-50%);
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 150ms, border-color 150ms, color 150ms;
+}
+
+.sensitive-input-toggle:hover {
+  border-color: var(--border-muted);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.sensitive-input-toggle:focus-visible {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 3px rgba(59,130,246,0.18);
+}
+
 .public-validation-page {
   background:
     linear-gradient(180deg, #f8fafc 0%, #eef2f7 48%, #f7fbfa 100%);

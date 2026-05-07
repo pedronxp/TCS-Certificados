@@ -142,7 +142,7 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
   const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
   const values = buildRenderValues(input);
 
-  for (const element of layout.elements) {
+  for (const element of sortElementsForRender(layout.elements)) {
     const pageIndex = Math.min(Math.max(element.pageIndex ?? 0, 0), pdfDocument.getPageCount() - 1);
     const page = pdfDocument.getPage(pageIndex);
     const { width: pageWidth, height: pageHeight } = page.getSize();
@@ -226,7 +226,7 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
     borderWidth: 1,
   });
 
-  for (const element of layout.elements) {
+  for (const element of sortElementsForRender(layout.elements)) {
     if (element.type === "qr") {
       page.drawImage(qrImage, {
         x: element.x,
@@ -256,6 +256,7 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
 
 function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const zip = new PizZip(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
+  applyDocxAssetReplacementsToZip(zip, layout);
   const sourceText = [
     layout.basePreviewHtml ?? "",
     zip.file("word/document.xml")?.asText() ?? "",
@@ -275,6 +276,14 @@ function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) 
   document.render(values);
 
   return Buffer.from(document.getZip().generate({ type: "nodebuffer" }));
+}
+
+function applyDocxAssetReplacementsToZip(zip: PizZip, layout: TemplateLayout) {
+  for (const asset of layout.baseAssets ?? []) {
+    if (!asset.path || !asset.replacementDataUrl) continue;
+    if (!zip.file(asset.path)) continue;
+    zip.file(asset.path, dataUrlToBuffer(asset.replacementDataUrl));
+  }
 }
 
 function buildRenderValues(input: RenderInput): Record<string, string> {
@@ -478,15 +487,15 @@ function certificateHtml({
       ? `<img src="${escapeHtml(page.background)}" style="position:absolute;inset:0;width:100%;height:100%;object-fit:fill;" />`
       : "";
     const baseBorder = page.border
-      ? `<div style="position:absolute;inset:${page.border.inset}px;border:${page.border.width}px solid ${page.border.color};pointer-events:none;"></div>`
+      ? `<div style="position:absolute;inset:${page.border.inset}px;border:${page.border.width}px solid ${page.border.color};pointer-events:none;z-index:6;"></div>`
       : "";
     const elements = layout.elements
       .filter((element) => (element.pageIndex ?? 0) === page.index)
       .map((element) => {
-        const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};font-style:${element.italic ? "italic" : "normal"};text-decoration:${element.underline ? "underline" : "none"};text-align:${element.align};display:flex;align-items:${element.type === "text" ? "flex-start" : "center"};justify-content:${justify(element.align)};overflow:hidden;white-space:pre-wrap;word-break:break-word;line-height:${resolveLineHeight(element.lineHeight)};`;
+        const common = `position:absolute;left:${element.x}px;top:${element.y}px;width:${element.width}px;height:${element.height}px;color:${element.color};font-family:${element.fontFamily};font-size:${element.fontSize}px;font-weight:${element.bold ? 700 : 400};font-style:${element.italic ? "italic" : "normal"};text-decoration:${element.underline ? "underline" : "none"};text-align:${element.align};display:flex;align-items:${element.type === "text" ? "flex-start" : "center"};justify-content:${justify(element.align)};overflow:hidden;white-space:pre-wrap;word-break:break-word;line-height:${resolveLineHeight(element.lineHeight)};z-index:${resolveElementZIndex(element)};`;
 
         if (element.type === "image") {
-          return `<img src="${escapeHtml(element.content)}" style="${common};object-fit:contain;" />`;
+          return `<img src="${escapeHtml(element.content)}" style="${common};object-fit:contain;opacity:${resolveImageOpacity(element)};" />`;
         }
 
         if (element.type === "qr") {
@@ -509,16 +518,19 @@ function certificateHtml({
 }
 
 function buildRenderPages(layout: TemplateLayout, width: number, height: number, background: string | null) {
+  const isEditableBase = layout.baseDocumentMode === "editable";
   const hasPageImages = layout.basePages?.some((page) => Boolean(page.imageDataUrl));
   const hasMultiPageElements = layout.elements.some((element) => (element.pageIndex ?? 0) > 0);
-  const sourcePages = layout.basePages?.length && (hasPageImages || hasMultiPageElements)
+  const sourcePages = layout.basePages?.length && (isEditableBase || hasPageImages || hasMultiPageElements)
     ? layout.basePages
     : [{ index: 0, width, height, imageDataUrl: layout.baseImageDataUrl ?? background ?? undefined, border: layout.basePageBorder }];
   const pages = sourcePages.map((page, index) => ({
     index: page.index ?? index,
     width: page.width || width,
     height: page.height || height,
-    background: page.imageDataUrl ?? (index === 0 ? background ?? layout.baseImageDataUrl ?? undefined : undefined),
+    background: isEditableBase
+      ? index === 0 ? background ?? undefined : undefined
+      : page.imageDataUrl ?? (index === 0 ? background ?? layout.baseImageDataUrl ?? undefined : undefined),
     border: page.border ?? (index === 0 ? layout.basePageBorder : undefined),
   }));
   const maxPageIndex = Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0));
@@ -538,6 +550,22 @@ function justify(align: "left" | "center" | "right") {
 
 function isNativeDocxBaseLayout(layout: TemplateLayout) {
   return layout.baseDocumentMode !== "editable" && Boolean(layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl);
+}
+
+function resolveImageOpacity(element: { id: string }) {
+  return element.id.startsWith("watermark-") ? 0.16 : 1;
+}
+
+function resolveElementZIndex(element: { id: string; type: string; zIndex?: number }) {
+  if ("zIndex" in element && typeof element.zIndex === "number") return Math.max(1, element.zIndex);
+  if (element.type === "qr") return 30;
+  if (element.type !== "image") return 40;
+  if (element.id.startsWith("watermark-")) return 1;
+  return 20;
+}
+
+function sortElementsForRender(elements: TemplateLayout["elements"]) {
+  return [...elements].sort((a, b) => resolveElementZIndex(a) - resolveElementZIndex(b));
 }
 
 function parseRenderLayout(layout: unknown) {

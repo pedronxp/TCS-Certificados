@@ -7,19 +7,21 @@
 
 "use client";
 
-import { useState } from "react";
+import { useRef } from "react";
 import { nanoid } from "nanoid";
-import { Plus, QrCode, Type } from "lucide-react";
+import { ImageIcon, QrCode, Type } from "lucide-react";
 import { useEditorStore } from "@/stores/editor-store";
 import { PropertyPanel } from "./property-panel";
 import { VariablePanel } from "./variable-panel";
 import { PageNavigator } from "./page-navigator";
+import { DocxAssetPanel } from "./docx-asset-panel";
 import { ImportZone } from "./import-zone";
 import type { SidebarTab } from "@/stores/editor-types";
 import type { TemplateElement } from "@/lib/certificate-layout";
 
 const TABS: { key: SidebarTab; label: string }[] = [
   { key: "properties", label: "Propriedades" },
+  { key: "assets", label: "Imagens" },
   { key: "variables", label: "Variáveis" },
   { key: "pages", label: "Páginas" },
 ];
@@ -35,6 +37,7 @@ export function EditorSidebar() {
   const addElement = useEditorStore((s) => s.addElement);
   const pushHistory = useEditorStore((s) => s.pushHistory);
   const activePageIndex = useEditorStore((s) => s.activePageIndex);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   function handleAddText() {
     pushHistory();
@@ -84,6 +87,31 @@ export function EditorSidebar() {
     addElement(el);
   }
 
+  async function handleAddImage(file: File) {
+    const dataUrl = await readFileAsDataUrl(file);
+    pushHistory();
+    const el: TemplateElement = {
+      id: nanoid(10),
+      type: "image",
+      content: dataUrl,
+      variableRequired: true,
+      x: 80,
+      y: 80,
+      pageIndex: activePageIndex,
+      width: 160,
+      height: 120,
+      fontSize: 12,
+      fontFamily: "Arial",
+      color: "#000000",
+      align: "center",
+      bold: false,
+      italic: false,
+      underline: false,
+      lineHeight: 1,
+    };
+    addElement(el);
+  }
+
   return (
     <div className="te-sidebar">
       {/* Tab bar */}
@@ -110,6 +138,7 @@ export function EditorSidebar() {
 
       {/* Tab content */}
       {sidebarTab === "properties" && <PropertyPanel />}
+      {sidebarTab === "assets" && <DocxAssetPanel />}
       {sidebarTab === "variables" && <VariablePanel />}
       {sidebarTab === "pages" && <PageNavigator />}
 
@@ -123,6 +152,20 @@ export function EditorSidebar() {
           <button className="te-btn" onClick={handleAddQR} style={{ justifyContent: "flex-start" }}>
             <QrCode /> QR Code
           </button>
+          <button className="te-btn" onClick={() => imageInputRef.current?.click()} style={{ justifyContent: "flex-start" }}>
+            <ImageIcon /> Imagem
+          </button>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml"
+            style={{ display: "none" }}
+            onChange={async (event) => {
+              const file = event.target.files?.[0];
+              if (file) await handleAddImage(file);
+              event.target.value = "";
+            }}
+          />
         </div>
       </div>
 
@@ -163,4 +206,13 @@ export function EditorSidebar() {
       <ImportZone />
     </div>
   );
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
 }

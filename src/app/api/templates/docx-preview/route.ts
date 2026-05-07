@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { templateBaseAssetSchema } from "@/lib/certificate-layout";
 import { buildDocxPreview } from "@/lib/docx-preview-service";
 import { validateDocxFile } from "@/lib/upload-limits";
 
@@ -22,7 +23,11 @@ export async function POST(request: Request) {
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    const preview = await buildDocxPreview(buffer);
+    const assetsJson = formData.get("assets");
+    const assets = typeof assetsJson === "string"
+      ? templateBaseAssetSchema.array().parse(JSON.parse(assetsJson))
+      : undefined;
+    const preview = await buildDocxPreview(buffer, { assets });
     return NextResponse.json(preview);
   } catch (error) {
     console.error("Falha ao gerar preview DOCX", error);

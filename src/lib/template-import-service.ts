@@ -81,6 +81,7 @@ async function buildImportedTemplateDraft(input: ImportTemplateInput): Promise<I
       pages: preview.pages,
       elements: [],
       pageBorder: preview.page.border,
+      assets: preview.assets,
       baseDocumentMode: "native",
     });
 

@@ -24,6 +24,9 @@ interface DragState {
   startY: number;
   originX: number;
   originY: number;
+  wasSelected: boolean;
+  moved: boolean;
+  historyPushed: boolean;
 }
 
 interface ResizeState {
@@ -49,6 +52,7 @@ export function useCanvasInteraction() {
       const store = useEditorStore.getState();
       const el = store.elements.find((x) => x.id === elementId);
       if (!el || store.inlineEditId === elementId) return;
+      if (e.button !== 0) return;
 
       if (e.detail === 2) {
         // Double click detected early, bypass drag
@@ -62,7 +66,7 @@ export function useCanvasInteraction() {
       e.stopPropagation();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
-      store.pushHistory();
+      const wasSelected = store.selectedId === elementId;
       store.selectElement(elementId);
 
       dragRef.current = {
@@ -72,6 +76,9 @@ export function useCanvasInteraction() {
         startY: e.clientY,
         originX: el.x,
         originY: el.y,
+        wasSelected,
+        moved: false,
+        historyPushed: false,
       };
     },
     [],
@@ -85,6 +92,14 @@ export function useCanvasInteraction() {
       const zoom = useEditorStore.getState().zoom;
       const dx = (e.clientX - drag.startX) / zoom;
       const dy = (e.clientY - drag.startY) / zoom;
+      const movedEnough = Math.abs(e.clientX - drag.startX) > 2 || Math.abs(e.clientY - drag.startY) > 2;
+
+      if (!movedEnough && !drag.moved) return;
+      if (!drag.historyPushed) {
+        useEditorStore.getState().pushHistory();
+        drag.historyPushed = true;
+      }
+      drag.moved = true;
 
       useEditorStore.getState().updateElement(drag.id, {
         x: Math.round(drag.originX + dx),
@@ -96,8 +111,16 @@ export function useCanvasInteraction() {
 
   const endDrag = useCallback(
     (e: React.PointerEvent) => {
-      if (dragRef.current?.pointerId === e.pointerId) {
+      const drag = dragRef.current;
+      if (drag?.pointerId === e.pointerId) {
         (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+        if (!drag.moved && drag.wasSelected) {
+          const store = useEditorStore.getState();
+          const el = store.elements.find((x) => x.id === drag.id);
+          if (el?.type === "text" || el?.type === "variable") {
+            store.startInlineEdit(drag.id);
+          }
+        }
         dragRef.current = null;
       }
     },

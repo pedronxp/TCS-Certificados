@@ -19,5 +19,25 @@ services:
     ports:
       - "3010:3000"
 
+  collabora:
+    image: collabora/code:latest
+    container_name: tcs-certificados-collabora
+    restart: unless-stopped
+    cap_add:
+      - MKNOD
+    environment:
+      username: ${COLLABORA_ADMIN_USER:-admin}
+      password: ${COLLABORA_ADMIN_PASSWORD:-tcs-collabora-admin}
+      dictionaries: pt_BR en_US
+      extra_params: >-
+        --o:ssl.enable=false
+        --o:ssl.termination=false
+        --o:net.proto=IPv4
+        --o:welcome.enable=false
+        --o:storage.wopi.host[0]=host.docker.internal
+        --o:storage.wopi.host[1]=localhost
+    ports:
+      - "9980:9980"
+
 volumes:
   postgres-data:

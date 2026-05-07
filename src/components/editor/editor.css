@@ -86,7 +86,6 @@ body.te-editor-active .app-main {
   flex-direction: column;
   height: 100vh;
   background: var(--surface-1);
-  overflow: hidden;
 }
 
 /* Body: fills remaining height, splits horizontally */
@@ -348,18 +347,11 @@ html.dark .te-canvas-area {
 
 .te-canvas-wrapper {
   position: relative;
-  box-shadow:
-    0 0 0 1px var(--border-muted),
-    0 20px 60px rgb(0 0 0 / 0.15),
-    0 4px 16px rgb(0 0 0 / 0.08);
   border-radius: 2px;
 }
 
 html.dark .te-canvas-wrapper {
-  box-shadow:
-    0 0 0 1px var(--border-strong),
-    0 20px 60px rgb(0 0 0 / 0.4),
-    0 4px 16px rgb(0 0 0 / 0.25);
+  border-color: var(--border-strong);
 }
 
 .te-page-stack {
@@ -370,6 +362,18 @@ html.dark .te-canvas-wrapper {
 .te-page-frame {
   position: absolute;
   background: #fff;
+  box-shadow:
+    0 0 0 1px var(--border-muted),
+    0 18px 50px rgb(0 0 0 / 0.14),
+    0 4px 14px rgb(0 0 0 / 0.08);
+  overflow: hidden;
+}
+
+html.dark .te-page-frame {
+  box-shadow:
+    0 0 0 1px var(--border-strong),
+    0 18px 50px rgb(0 0 0 / 0.38),
+    0 4px 14px rgb(0 0 0 / 0.24);
 }
 
 .te-page-active {
@@ -411,6 +415,66 @@ html.dark .te-canvas-wrapper {
 
 .te-page-fallback svg { width: 2rem; height: 2rem; color: var(--brand-600); }
 .te-page-fallback span { font-size: 0.82rem; font-weight: 800; }
+
+.te-muted-copy {
+  margin: 0 0 0.75rem;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.te-error-copy {
+  margin: 0 0 0.75rem;
+  color: #b91c1c;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.te-docx-assets {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.te-docx-asset {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0.55rem;
+  padding: 0.55rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.te-docx-asset img {
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.te-docx-asset strong,
+.te-docx-asset small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.te-docx-asset strong {
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+.te-docx-asset small {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+
+.te-docx-asset .te-btn {
+  grid-column: 1 / -1;
+  justify-content: center;
+}
 
 /* ─── Canvas Element ─── */
 .te-element {
@@ -664,6 +728,16 @@ html.dark .te-canvas-wrapper {
   margin-bottom: 0.5rem;
 }
 
+.te-layer-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.te-layer-actions .te-btn {
+  width: 100%;
+}
+
 .te-prop-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -683,6 +757,23 @@ html.dark .te-canvas-wrapper {
   padding: 0.25rem 0.5rem;
   font-size: 0.78rem;
   border-radius: 5px;
+}
+
+.te-image-preview {
+  display: grid;
+  place-items: center;
+  min-height: 6rem;
+  margin-top: 0.625rem;
+  padding: 0.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-1);
+}
+
+.te-image-preview img {
+  max-width: 100%;
+  max-height: 8rem;
+  object-fit: contain;
 }
 
 /* ─── Format bar ─── */

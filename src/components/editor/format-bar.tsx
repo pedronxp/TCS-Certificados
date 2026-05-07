@@ -8,7 +8,18 @@ import { AlignCenter, AlignLeft, AlignRight, Bold, Italic, Underline } from "luc
 import { useEditorStore } from "@/stores/editor-store";
 import type { TemplateElement } from "@/lib/certificate-layout";
 
-const FONT_OPTIONS = ["Arial", "Georgia", "Times New Roman", "Verdana", "Tahoma", "Courier New"] as const;
+const FONT_OPTIONS = [
+  "Arial",
+  "Arial Narrow",
+  "Calibri",
+  "Cambria",
+  "Georgia",
+  "Times New Roman",
+  "Verdana",
+  "Tahoma",
+  "Impact",
+  "Courier New",
+] as const;
 const LINE_HEIGHT_OPTIONS = [1, 1.15, 1.3, 1.5, 1.8, 2] as const;
 
 interface FormatBarProps {

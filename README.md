@@ -152,7 +152,7 @@ Não há integração direta com WhatsApp Business API, Twilio ou Z-API. O siste
 - `bcryptjs` para hash de senha.
 - `docx`, `docxtemplater`, `pizzip`, `mammoth`, `pdf-lib` e `qrcode` para documentos.
 - `csv-parse` e `xlsx` para importação.
-- Microsoft Graph, CloudConvert, Gotenberg ou LibreOffice para conversão DOCX para PDF.
+- Gotenberg/LibreOffice para conversão DOCX para PDF e Collabora Online para edição DOCX no navegador.
 - Playwright para suporte de renderização e verificações visuais.
 
 ## Pré-requisitos
@@ -161,7 +161,7 @@ Instale antes de rodar o projeto:
 
 - Node.js compatível com o projeto.
 - npm.
-- Docker e Docker Compose, se for usar PostgreSQL/Gotenberg locais.
+- Docker e Docker Compose, se for usar PostgreSQL, Gotenberg e Collabora locais.
 - Git.
 
 Recomendado para desenvolvimento:
@@ -212,7 +212,8 @@ Esse comando sobe os serviços locais opcionais:
 - banco `tcs_certificados`;
 - usuário `postgres`;
 - senha `postgres`;
-- Gotenberg em `localhost:3010` para conversão DOCX/PDF, caso você não configure uma API externa.
+- Gotenberg em `localhost:3010` para conversão DOCX/PDF;
+- Collabora Online em `localhost:9980` para editar DOCX com LibreOffice no navegador.
 
 ### 5. Gere o Prisma Client
 
@@ -380,15 +381,10 @@ Se o banco local não tiver `pg_cron`, a migration não quebra: ela cria a tabel
 | `SUPABASE_KEEPALIVE_KEY` | Opcional | Chave alternativa para `tools/supabase-keepalive.mjs`; se ausente, usa `SUPABASE_SERVICE_ROLE_KEY`. |
 | `SUPABASE_KEEPALIVE_RPC` | Opcional | Nome da RPC chamada pelo keepalive. Padrão: `run_system_keepalive`. |
 | `SUPABASE_CERTIFICATE_BUCKET` | Opcional | Bucket onde PDFs e DOCXs são armazenados. |
-| `MICROSOFT_GRAPH_TENANT_ID` | Opcional | Tenant Microsoft Entra usado pelo conversor Microsoft Graph. |
-| `MICROSOFT_GRAPH_CLIENT_ID` | Opcional | Application/client ID do app registrado no Microsoft Entra. |
-| `MICROSOFT_GRAPH_CLIENT_SECRET` | Opcional | Client secret server-side do app Microsoft Graph. |
-| `MICROSOFT_GRAPH_DRIVE_ID` | Opcional | Drive do OneDrive/SharePoint usado para upload temporario e conversao. |
-| `MICROSOFT_GRAPH_USER_ID` | Opcional | Usuario dono do OneDrive quando nao houver `MICROSOFT_GRAPH_DRIVE_ID`. |
-| `MICROSOFT_GRAPH_FOLDER_PATH` | Opcional | Pasta ja existente para arquivos temporarios. Padrao: raiz do drive. |
 | `GOTENBERG_URL` | Opcional | URL da API Gotenberg. Padrão local: `http://localhost:3010`. |
-| `CLOUDCONVERT_API_KEY` | Opcional | Chave server-side para converter DOCX em PDF na Vercel sem LibreOffice local. |
-| `CLOUDCONVERT_ENGINE` | Opcional | Engine usada no CloudConvert. Padrão: `libreoffice`. |
+| `NEXT_PUBLIC_COLLABORA_URL` | Opcional | URL do Collabora Online acessada pelo navegador. Padrão local: `http://localhost:9980`. |
+| `COLLABORA_INTERNAL_APP_URL` | Opcional | URL do app Next acessada pelo container Collabora para chamadas WOPI. Padrão local: `http://host.docker.internal:3000`. |
+| `COLLABORA_ACCESS_TOKEN_SECRET` | Opcional | Chave para assinar tokens temporários do editor Collabora/WOPI. |
 
 ## Comandos úteis
 
@@ -496,36 +492,17 @@ npm run prisma:migrate
 
 ### PDF não é gerado a partir de DOCX
 
-Em produção na Vercel, configure um conversor externo porque não há LibreOffice local no runtime serverless.
-
-Opção recomendada para Vercel:
-
-```env
-MICROSOFT_GRAPH_TENANT_ID="seu-tenant-id"
-MICROSOFT_GRAPH_CLIENT_ID="seu-client-id"
-MICROSOFT_GRAPH_CLIENT_SECRET="seu-client-secret"
-MICROSOFT_GRAPH_DRIVE_ID="drive-do-onedrive-ou-sharepoint"
-```
-
-O app Microsoft precisa de permissao Microsoft Graph para ler/escrever arquivos no drive usado para conversao, como `Files.ReadWrite.All`, com consentimento administrativo.
-
-Alternativa com CloudConvert:
-
-```env
-CLOUDCONVERT_API_KEY="sua-chave-cloudconvert"
-CLOUDCONVERT_ENGINE="libreoffice"
-```
-
-Alternativa com Gotenberg hospedado fora da Vercel:
+Em produção na Vercel, configure uma instância Gotenberg externa porque não há LibreOffice local no runtime serverless.
 
 ```env
 GOTENBERG_URL="https://sua-api-gotenberg"
 ```
 
-No ambiente local com Docker, confira se o Gotenberg está disponível:
+No ambiente local com Docker, confira se o Gotenberg e o Collabora estão disponíveis:
 
 ```text
 http://localhost:3010
+http://localhost:9980
 ```
 
 ### QR Code aponta para URL errada
@@ -561,7 +538,7 @@ Antes de publicar:
 7. Rode migrations no banco de produção.
 8. Configure bucket privado no Supabase, se usar Storage.
 9. Restrinja acesso às chaves server-side.
-10. Configure `MICROSOFT_GRAPH_*`, `CLOUDCONVERT_API_KEY` ou `GOTENBERG_URL` para gerar PDF a partir de DOCX na Vercel.
+10. Configure `GOTENBERG_URL` para gerar PDF a partir de DOCX na Vercel.
 11. Configure rotina de limpeza para certificados com `deleteAt` vencido.
 12. Valide geração de PDF/DOCX no ambiente final.
 13. Rode `npm run lint`.

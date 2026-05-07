@@ -14,7 +14,7 @@ import type {
   HistoryEntry,
   SidebarTab,
 } from "./editor-types";
-import type { TemplateElement, TemplateLayout, TemplateLayoutPage } from "@/lib/certificate-layout";
+import type { TemplateElement, TemplateLayout } from "@/lib/certificate-layout";
 
 const MAX_HISTORY = 50;
 const ZOOM_STEP = 0.1;
@@ -27,7 +27,7 @@ function clampZoom(z: number) {
   return Math.round(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)) * 100) / 100;
 }
 
-function snapshotString(state: Pick<EditorStore, "name" | "description" | "orientation" | "width" | "height" | "background" | "elements">) {
+function snapshotString(state: Pick<EditorStore, "name" | "description" | "orientation" | "width" | "height" | "background" | "elements" | "baseAssets">) {
   return JSON.stringify({
     name: state.name,
     description: state.description,
@@ -36,6 +36,7 @@ function snapshotString(state: Pick<EditorStore, "name" | "description" | "orien
     height: state.height,
     background: state.background,
     elements: state.elements,
+    baseAssets: state.baseAssets,
   });
 }
 
@@ -62,6 +63,7 @@ export const useEditorStore = create<EditorStore>()(
     baseRenderEngine: null,
     baseImageDataUrl: null,
     baseImageEngine: null,
+    baseAssets: [],
 
     setDocument: (patch) =>
       set((s) => {
@@ -266,6 +268,7 @@ export const useEditorStore = create<EditorStore>()(
         baseRenderEngine: s.baseRenderEngine ?? undefined,
         baseImageDataUrl: s.baseImageDataUrl ?? undefined,
         baseImageEngine: s.baseImageEngine ?? undefined,
+        baseAssets: s.baseAssets.length > 0 ? JSON.parse(JSON.stringify(s.baseAssets)) : undefined,
       };
       return layout;
     },
@@ -293,6 +296,7 @@ export const useEditorStore = create<EditorStore>()(
         s.baseRenderEngine = layout.baseRenderEngine ?? null;
         s.baseImageDataUrl = layout.baseImageDataUrl ?? null;
         s.baseImageEngine = layout.baseImageEngine ?? null;
+        s.baseAssets = layout.baseAssets ?? [];
 
         // Reset transient state
         s.selectedId = s.elements[0]?.id ?? null;

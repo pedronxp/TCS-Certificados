@@ -15,6 +15,9 @@ export function PageNavigator() {
   const height = useEditorStore((s) => s.height);
 
   const pageCount = Math.max(1, basePages.length);
+  const activePage = basePages[activePageIndex];
+  const displayWidth = activePage?.width ?? width;
+  const displayHeight = activePage?.height ?? height;
 
   return (
     <div className="te-panel">
@@ -24,7 +27,7 @@ export function PageNavigator() {
         <strong>{pageCount}</strong>
         <span>{pageCount === 1 ? "página" : "páginas"}</span>
         <span style={{ marginLeft: "auto" }}>
-          {width} × {height}
+          {displayWidth} x {displayHeight}
         </span>
       </div>
 

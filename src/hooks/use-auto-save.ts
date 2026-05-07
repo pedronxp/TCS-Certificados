@@ -26,7 +26,10 @@ export function useAutoSave({ onSave, enabled = true }: UseAutoSaveOptions) {
   const isSaving = useEditorStore((s) => s.isSaving);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveRef = useRef(onSave);
-  saveRef.current = onSave;
+
+  useEffect(() => {
+    saveRef.current = onSave;
+  }, [onSave]);
 
   /* ─── Debounced auto-save ─── */
   useEffect(() => {

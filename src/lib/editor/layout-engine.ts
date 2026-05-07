@@ -5,7 +5,7 @@
  * Used by the canvas component to compute where elements and pages render.
  */
 
-import type { TemplateElement, TemplateLayout, TemplateLayoutPage } from "@/lib/certificate-layout";
+import type { TemplateElement, TemplateLayout, TemplateLayoutPage, TemplatePageBorder } from "@/lib/certificate-layout";
 
 /* ─── Page geometry ─── */
 
@@ -16,9 +16,11 @@ export interface PageGeometry {
   width: number;
   height: number;
   imageDataUrl?: string;
+  border?: TemplatePageBorder;
 }
 
-const PAGE_GAP = 32;
+const PAGE_GAP = 64;
+const PDF_POINTS_TO_CSS_PIXELS = 4 / 3;
 
 /**
  * Build the array of page rectangles for the canvas stack.
@@ -34,18 +36,21 @@ export function buildPageGeometries(
   const basePages = layout.basePages ?? [];
 
   if (basePages.length > 0) {
+    const pageSizes = basePages.map((bp) => pageSizeFromBasePage(bp, docWidth, docHeight));
+    const maxWidth = Math.max(...pageSizes.map((size) => size.width));
     let offsetY = 0;
+
     for (let i = 0; i < basePages.length; i++) {
       const bp = basePages[i];
-      const pw = docWidth;
-      const ph = docHeight;
+      const { width: pw, height: ph } = pageSizes[i];
       pages.push({
         index: i,
-        x: 0,
+        x: Math.round((maxWidth - pw) / 2),
         y: offsetY,
         width: pw,
         height: ph,
         imageDataUrl: bp.imageDataUrl,
+        border: bp.border,
       });
       offsetY += ph + PAGE_GAP;
     }
@@ -67,10 +72,41 @@ export function buildPageGeometries(
  */
 export function canvasBounds(pages: PageGeometry[]) {
   if (pages.length === 0) return { width: 0, height: 0 };
-  const maxW = Math.max(...pages.map((p) => p.width));
+  const maxW = Math.max(...pages.map((p) => p.x + p.width));
   const last = pages[pages.length - 1];
   const totalH = last.y + last.height;
   return { width: maxW, height: totalH };
+}
+
+function pageSizeFromBasePage(
+  page: TemplateLayoutPage,
+  fallbackWidth: number,
+  fallbackHeight: number,
+) {
+  const rawWidth = positivePageSize(page.width, fallbackWidth);
+  const rawHeight = positivePageSize(page.height, fallbackHeight);
+  const scaledWidth = Math.round(rawWidth * PDF_POINTS_TO_CSS_PIXELS);
+  const scaledHeight = Math.round(rawHeight * PDF_POINTS_TO_CSS_PIXELS);
+
+  if (
+    closeTo(scaledWidth, fallbackWidth) &&
+    closeTo(scaledHeight, fallbackHeight)
+  ) {
+    return { width: fallbackWidth, height: fallbackHeight };
+  }
+
+  return { width: rawWidth, height: rawHeight };
+}
+
+function positivePageSize(value: number | undefined, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : fallback;
+}
+
+function closeTo(value: number, target: number) {
+  const tolerance = Math.max(4, target * 0.03);
+  return Math.abs(value - target) <= tolerance;
 }
 
 /**

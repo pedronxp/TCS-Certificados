@@ -7,6 +7,8 @@
 
 "use client";
 
+/* eslint-disable @next/next/no-img-element */
+
 import { useRef, useEffect, type PointerEvent as ReactPointerEvent } from "react";
 import { useEditorStore } from "@/stores/editor-store";
 import { ResizeHandles } from "./resize-handles";
@@ -71,6 +73,7 @@ export function CanvasElement({
     fontStyle: element.italic ? "italic" : "normal",
     textDecoration: element.underline ? "underline" : "none",
     lineHeight: element.lineHeight,
+    zIndex: resolveElementZIndex(element, isSelected),
     alignItems: "flex-start",
     justifyContent:
       element.align === "center"
@@ -79,6 +82,53 @@ export function CanvasElement({
           ? "flex-end"
           : "flex-start",
   };
+
+  if (element.type === "image") {
+    return (
+      <div
+        className={className}
+        style={{
+          ...style,
+          alignItems: "center",
+          justifyContent: "center",
+          background: element.content ? "transparent" : "rgba(0,0,0,0.04)",
+          border: isSelected ? undefined : "1px dashed var(--border-muted)",
+        }}
+        onPointerDown={(e) => onDragStart(e, element.id)}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
+      >
+        {element.content ? (
+          <img
+            src={element.content}
+            alt=""
+            draggable={false}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              opacity: resolveImageOpacity(element),
+              pointerEvents: "none",
+              userSelect: "none",
+            }}
+          />
+        ) : (
+          <span style={{ pointerEvents: "none", fontSize: 12, color: "var(--text-muted)" }}>
+            Imagem
+          </span>
+        )}
+        {isSelected && (
+          <ResizeHandles
+            elementId={element.id}
+            onStart={onResizeStart}
+            onMove={onResizeMove}
+            onEnd={onResizeEnd}
+          />
+        )}
+      </div>
+    );
+  }
 
   /* Render QR placeholder */
   if (element.type === "qr") {
@@ -95,6 +145,7 @@ export function CanvasElement({
         onPointerDown={(e) => onDragStart(e, element.id)}
         onPointerMove={onDragMove}
         onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
       >
         <svg viewBox="0 0 24 24" width="40%" height="40%" fill="none" stroke="currentColor" strokeWidth={1.5}>
           <rect x="3" y="3" width="7" height="7" rx="1" />
@@ -128,6 +179,9 @@ export function CanvasElement({
         if (!isEditing) onDragMove(e);
       }}
       onPointerUp={(e) => {
+        if (!isEditing) onDragEnd(e);
+      }}
+      onPointerCancel={(e) => {
         if (!isEditing) onDragEnd(e);
       }}
       onDoubleClick={() => onDoubleClick(element.id)}
@@ -173,4 +227,23 @@ export function CanvasElement({
       )}
     </div>
   );
+}
+
+function resolveElementZIndex(element: TemplateElement, isSelected: boolean) {
+  if (isSelected) return 1000;
+  if (typeof element.zIndex === "number") return Math.max(1, element.zIndex);
+  if (element.type === "qr") return 30;
+  if (element.type !== "image") return 40;
+  if (isWatermarkElement(element)) return 1;
+
+  const isWatermarkLike = element.width >= 420 || element.height >= 260;
+  return isWatermarkLike ? 1 : 20;
+}
+
+function resolveImageOpacity(element: TemplateElement) {
+  return isWatermarkElement(element) ? 0.16 : 1;
+}
+
+function isWatermarkElement(element: TemplateElement) {
+  return element.type === "image" && element.id.startsWith("watermark-");
 }

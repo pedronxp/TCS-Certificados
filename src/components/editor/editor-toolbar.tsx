@@ -5,7 +5,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { FileText, Minus, PanelLeft, Plus, Redo2, RotateCcw, Save, Undo2 } from "lucide-react";
+import { FilePenLine, FileText, Minus, PanelLeft, Plus, Redo2, RotateCcw, Save, Undo2 } from "lucide-react";
 import { useEditorStore } from "@/stores/editor-store";
 
 interface EditorToolbarProps {
@@ -17,6 +17,9 @@ export function EditorToolbar({ onSave }: EditorToolbarProps) {
   const orientation = useEditorStore((s) => s.orientation);
   const isDirty = useEditorStore((s) => s.isDirty);
   const isSaving = useEditorStore((s) => s.isSaving);
+  const id = useEditorStore((s) => s.id);
+  const baseDocumentMode = useEditorStore((s) => s.baseDocumentMode);
+  const baseFileType = useEditorStore((s) => s.baseFileType);
   const zoom = useEditorStore((s) => s.zoom);
   const canUndo = useEditorStore((s) => s.past.length > 0);
   const canRedo = useEditorStore((s) => s.future.length > 0);
@@ -27,6 +30,11 @@ export function EditorToolbar({ onSave }: EditorToolbarProps) {
   const resetZoom = useEditorStore((s) => s.resetZoom);
 
   const [navOpen, setNavOpen] = useState(false);
+  const canOpenDocxEditor = Boolean(
+    id &&
+      baseDocumentMode === "native" &&
+      baseFileType?.includes("wordprocessingml"),
+  );
 
   const toggleNav = useCallback(() => {
     setNavOpen((prev) => {
@@ -106,6 +114,22 @@ export function EditorToolbar({ onSave }: EditorToolbarProps) {
       </div>
 
       <div className="te-toolbar-divider" />
+
+      {canOpenDocxEditor && (
+        <>
+          <button
+            className="te-btn"
+            onClick={() => {
+              window.location.href = `/modelos/${id}/office`;
+            }}
+            title="Abrir no editor DOCX LibreOffice"
+          >
+            <FilePenLine />
+            Editar DOCX
+          </button>
+          <div className="te-toolbar-divider" />
+        </>
+      )}
 
       {/* ─── Save ─── */}
       <button

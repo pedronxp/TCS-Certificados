@@ -13,11 +13,11 @@ import { useRouter } from "next/navigation";
 import { useEditorStore } from "@/stores/editor-store";
 import { useAutoSave } from "@/hooks/use-auto-save";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
-import type { TemplateLayout } from "@/lib/certificate-layout";
+import { isPdfDataUrl } from "@/lib/pdf-preview.client";
+import type { TemplateLayout, TemplateLayoutPage } from "@/lib/certificate-layout";
 import { EditorToolbar } from "./editor-toolbar";
 import { EditorCanvas } from "./editor-canvas";
 import { EditorSidebar } from "./editor-sidebar";
-import { EditorDocumentPanel } from "./editor-document-panel";
 import "./editor.css";
 
 interface EditorShellProps {
@@ -54,6 +54,41 @@ export function EditorShell({ initial }: EditorShellProps) {
     fromTemplate(initial);
   }, [initial, fromTemplate]);
 
+  useEffect(() => {
+    const s = useEditorStore.getState();
+    if (!isPdfDataUrl(s.baseRenderDataUrl)) return;
+    if (s.baseDocumentMode === "editable" && s.elements.length > 0) return;
+    if (s.baseImageEngine === "pdfjs-gotenberg" && s.basePages.some((p) => p.imageDataUrl)) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const { renderPdfPagesFromDataUrl } = await import("@/lib/pdf-preview.client");
+        const renderedPages = await renderPdfPagesFromDataUrl(s.baseRenderDataUrl!);
+        if (cancelled || renderedPages.length === 0) return;
+
+        const pages = mergeRenderedPages(s.basePages, renderedPages);
+        const firstPage = pages[0];
+
+        useEditorStore.setState({
+          basePages: pages,
+          baseImageDataUrl: firstPage?.imageDataUrl ?? s.baseImageDataUrl,
+          baseImageEngine: "pdfjs-gotenberg",
+          width: firstPage?.width ?? s.width,
+          height: firstPage?.height ?? s.height,
+          orientation: firstPage?.orientation ?? s.orientation,
+        });
+      } catch (err) {
+        console.error("Failed to render PDF preview pages:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   /* ─── Auto-generate DOCX preview if missing ─── */
   useEffect(() => {
     const s = useEditorStore.getState();
@@ -61,8 +96,15 @@ export function EditorShell({ initial }: EditorShellProps) {
       s.basePages.some((p) => p.imageDataUrl) ||
       s.baseRenderDataUrl ||
       s.baseImageDataUrl;
+    const isDocx = isDocxSource(s.baseFileName, s.baseFileType, s.baseFileDataUrl);
+    const needsEditableRefresh =
+      isDocx && s.baseDocumentMode === "editable" && s.elements.length === 0;
+    const needsPdfRefresh =
+      isDocx &&
+      s.baseImageEngine !== "pdfjs-gotenberg" &&
+      !isPdfDataUrl(s.baseRenderDataUrl);
 
-    if (hasPreview || !s.baseFileDataUrl) return;
+    if ((!needsEditableRefresh && hasPreview && !needsPdfRefresh) || !s.baseFileDataUrl) return;
 
     // Dynamically import the client-side extractor and generate preview
     (async () => {
@@ -76,13 +118,23 @@ export function EditorShell({ initial }: EditorShellProps) {
           fileType: s.baseFileType ?? undefined,
         });
         if (preview?.pages && preview.pages.length > 0) {
-          useEditorStore.getState().setDocument({
+          const firstPage = preview.pages[0] ?? preview.page;
+          const isEditableDocx = s.baseDocumentMode === "editable" && preview.editable && preview.elements.length > 0;
+
+          useEditorStore.setState({
+            width: firstPage?.width ?? s.width,
+            height: firstPage?.height ?? s.height,
+            orientation: firstPage?.orientation ?? s.orientation,
+            elements: isEditableDocx ? preview.elements : s.elements,
             basePages: preview.pages,
+            baseDocumentMode: isEditableDocx ? "editable" : s.baseDocumentMode,
             baseRenderDataUrl: preview.renderDataUrl ?? null,
             baseRenderFileType: preview.renderFileType ?? null,
             baseRenderEngine: preview.renderEngine ?? null,
             baseImageDataUrl: preview.imageDataUrl ?? null,
             baseImageEngine: preview.imageEngine ?? null,
+            baseAssets: preview.assets ?? s.baseAssets,
+            isDirty: true,
           });
         }
       } catch (err) {
@@ -143,8 +195,6 @@ export function EditorShell({ initial }: EditorShellProps) {
   useAutoSave({ onSave: handleSave });
   useKeyboardShortcuts({ onSave: handleSave });
 
-  const hasBaseDocument = useEditorStore((s) => !!s.baseFileName);
-
   return (
     <div className="te-root">
       <EditorToolbar onSave={handleSave} />
@@ -153,5 +203,37 @@ export function EditorShell({ initial }: EditorShellProps) {
         <EditorSidebar />
       </div>
     </div>
+  );
+}
+
+function mergeRenderedPages(
+  currentPages: TemplateLayoutPage[],
+  renderedPages: TemplateLayoutPage[],
+) {
+  return renderedPages.map((page, index) => {
+    const current = currentPages[index];
+
+    return {
+      ...current,
+      ...page,
+      index: current?.index ?? page.index ?? index,
+      border: current?.border ?? page.border,
+    };
+  });
+}
+
+function isDocxSource(
+  fileName: string | null,
+  fileType: string | null,
+  dataUrl: string | null,
+) {
+  const lowerName = fileName?.toLowerCase() ?? "";
+  const lowerType = fileType?.toLowerCase() ?? "";
+  const lowerDataUrl = dataUrl?.toLowerCase() ?? "";
+
+  return (
+    lowerName.endsWith(".docx") ||
+    lowerType.includes("wordprocessingml") ||
+    lowerDataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml")
   );
 }

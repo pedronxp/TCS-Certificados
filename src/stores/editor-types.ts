@@ -5,7 +5,7 @@
  * Deliberately decoupled from React; these are pure data contracts.
  */
 
-import type { TemplateElement, TemplateLayout, TemplateLayoutPage } from "@/lib/certificate-layout";
+import type { TemplateBaseAsset, TemplateElement, TemplateLayout, TemplateLayoutPage } from "@/lib/certificate-layout";
 
 /* ─── Document Slice ─── */
 export interface DocumentState {
@@ -29,6 +29,7 @@ export interface DocumentState {
   baseRenderEngine: string | null;
   baseImageDataUrl: string | null;
   baseImageEngine: string | null;
+  baseAssets: TemplateBaseAsset[];
 }
 
 export interface DocumentActions {
@@ -66,7 +67,7 @@ export interface SelectionActions {
 }
 
 /* ─── UI Slice ─── */
-export type SidebarTab = "properties" | "variables" | "pages";
+export type SidebarTab = "properties" | "assets" | "variables" | "pages";
 
 export interface UIState {
   zoom: number;

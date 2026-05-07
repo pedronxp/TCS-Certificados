@@ -11,7 +11,7 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useEditorStore } from "@/stores/editor-store";
-import { normalizeVariableKey, labelFromKey } from "@/lib/certificate-layout";
+import { normalizeVariableKey } from "@/lib/certificate-layout";
 import type { TemplateElement } from "@/lib/certificate-layout";
 
 export function VariablePanel() {

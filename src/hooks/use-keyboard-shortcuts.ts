@@ -21,7 +21,10 @@ interface UseKeyboardShortcutsOptions {
 
 export function useKeyboardShortcuts({ onSave }: UseKeyboardShortcutsOptions = {}) {
   const onSaveRef = useRef(onSave);
-  onSaveRef.current = onSave;
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+  }, [onSave]);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -73,6 +76,33 @@ export function useKeyboardShortcuts({ onSave }: UseKeyboardShortcutsOptions = {
       }
 
       /* ─── Delete / Backspace → Remove element ─── */
+      if (store.selectedId && !store.inlineEditId && !isInputFocused) {
+        const selected = store.elements.find((element) => element.id === store.selectedId);
+
+        if ((e.key === "Enter" || e.key === "F2") && (selected?.type === "text" || selected?.type === "variable")) {
+          e.preventDefault();
+          store.startInlineEdit(store.selectedId);
+          return;
+        }
+
+        if (selected && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+          e.preventDefault();
+          const step = e.shiftKey ? 10 : 1;
+          const patch =
+            e.key === "ArrowUp"
+              ? { y: selected.y - step }
+              : e.key === "ArrowDown"
+                ? { y: selected.y + step }
+                : e.key === "ArrowLeft"
+                  ? { x: selected.x - step }
+                  : { x: selected.x + step };
+
+          store.pushHistory();
+          store.updateElement(store.selectedId, patch);
+          return;
+        }
+      }
+
       if ((e.key === "Delete" || e.key === "Backspace") && store.selectedId && !store.inlineEditId && !isInputFocused) {
         e.preventDefault();
         store.pushHistory();

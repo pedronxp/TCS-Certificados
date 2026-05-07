@@ -1,5 +1,6 @@
 import { extractVariableKeys } from "@/lib/certificate-layout";
-import type { TemplateElement, TemplatePageBorder } from "@/lib/certificate-layout";
+import type { TemplateBaseAsset, TemplateElement, TemplatePageBorder } from "@/lib/certificate-layout";
+import { isPdfDataUrl } from "@/lib/pdf-preview.client";
 
 export type ExtractedDocumentPage = {
   index?: number;
@@ -21,11 +22,16 @@ type ExtractedDocumentPreview = {
   renderEngine?: string;
   imageDataUrl?: string;
   imageEngine?: string;
+  assets?: TemplateBaseAsset[];
   variables?: string[];
   converterOffline?: boolean;
 };
 
 export async function extractDocumentPreview(file: File): Promise<ExtractedDocumentPreview> {
+  if (isPdf(file)) {
+    return buildPdfPreviewFromDataUrl(await readFileAsDataUrl(file), file.type || "application/pdf");
+  }
+
   if (!isDocx(file)) {
     return {
       previewHtml: undefined,
@@ -38,16 +44,17 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
   const arrayBuffer = await file.arrayBuffer();
   const serverPreview = await extractDocumentPreviewFromApi(file);
   if (serverPreview) {
-    const page = serverPreview.page ?? await extractDocxPage(arrayBuffer);
-    const pages = normalizeExtractedPages(serverPreview.pages, page);
-    const elements = serverPreview.editable
-      ? serverPreview.elements.length > 0
-        ? serverPreview.elements
+    const visualPreview = await withPdfPageImages(serverPreview);
+    const page = visualPreview.page ?? await extractDocxPage(arrayBuffer);
+    const pages = normalizeExtractedPages(visualPreview.pages, page);
+    const elements = visualPreview.editable
+      ? visualPreview.elements.length > 0
+        ? visualPreview.elements
         : await extractEditableElementsSafely(arrayBuffer, page)
       : [];
 
     return {
-      ...serverPreview,
+      ...visualPreview,
       editable: elements.length > 0,
       elements,
       page: growPageToFit(page, elements),
@@ -59,14 +66,11 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
   const result = await mammoth.extractRawText({ arrayBuffer });
   const previewHtml = rawTextToPreviewHtml(result.value);
   const page = await extractDocxPage(arrayBuffer);
-  const renderedElements = await extractEditableElementsSafely(arrayBuffer, page);
-  const elements = renderedElements.length > 0 ? renderedElements : htmlPreviewToEditableElements(previewHtml);
-
   return {
     previewHtml,
-    editable: elements.length > 0,
-    elements,
-    page: growPageToFit(page, elements),
+    editable: false,
+    elements: [],
+    page,
     pages: page ? [page] : undefined,
     variables: extractVariableKeys(result.value),
   };
@@ -82,8 +86,9 @@ export async function extractDocumentPreviewFromDataUrl({
   fileType?: string;
 }) {
   const bytes = dataUrlToUint8Array(dataUrl);
-  const file = new File([bytes], fileName || "documento.docx", {
-    type: fileType || "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  const normalizedFileType = normalizeBrowserFileType(fileType, fileName);
+  const file = new File([bytes], fileName || defaultFileNameForType(normalizedFileType), {
+    type: normalizedFileType,
   });
 
   return extractDocumentPreview(file);
@@ -107,6 +112,7 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       renderEngine?: string;
       imageDataUrl?: string;
       imageEngine?: string;
+      assets?: TemplateBaseAsset[];
       page?: ExtractedDocumentPage;
       pages?: ExtractedDocumentPage[];
       variables?: string[];
@@ -122,6 +128,7 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       renderEngine: preview.renderEngine,
       imageDataUrl: preview.imageDataUrl,
       imageEngine: preview.imageEngine,
+      assets: preview.assets ?? [],
       page: preview.page,
       pages: preview.pages,
       editable: Boolean(preview.editable),
@@ -149,6 +156,113 @@ function isDocx(file: File) {
     file.type.includes("wordprocessingml") ||
     file.name.toLowerCase().endsWith(".docx")
   );
+}
+
+function isPdf(file: File) {
+  return file.type.toLowerCase().includes("pdf") || file.name.toLowerCase().endsWith(".pdf");
+}
+
+async function buildPdfPreviewFromDataUrl(dataUrl: string, fileType: string): Promise<ExtractedDocumentPreview> {
+  try {
+    const { renderPdfPagesFromDataUrl } = await import("@/lib/pdf-preview.client");
+    const pages = await renderPdfPagesFromDataUrl(dataUrl);
+    const page = pages[0];
+
+    return {
+      previewHtml: undefined,
+      editable: false,
+      elements: [],
+      page,
+      pages,
+      renderDataUrl: dataUrl,
+      renderFileType: fileType,
+      renderEngine: "pdfjs",
+      imageDataUrl: page?.imageDataUrl,
+      imageEngine: page?.imageDataUrl ? "pdfjs" : undefined,
+      variables: [],
+    };
+  } catch (error) {
+    console.warn("Nao foi possivel renderizar o PDF para preview.", error);
+    return {
+      previewHtml: undefined,
+      editable: false,
+      elements: [],
+      renderDataUrl: dataUrl,
+      renderFileType: fileType,
+      renderEngine: "pdf",
+      variables: [],
+    };
+  }
+}
+
+async function withPdfPageImages(preview: ExtractedDocumentPreview): Promise<ExtractedDocumentPreview> {
+  if (preview.editable && preview.elements.length > 0) return preview;
+
+  const renderDataUrl = preview.renderDataUrl;
+  if (!renderDataUrl || !isPdfDataUrl(renderDataUrl)) return preview;
+  if (preview.pages?.some((page) => page.imageDataUrl)) return preview;
+
+  try {
+    const { renderPdfPagesFromDataUrl } = await import("@/lib/pdf-preview.client");
+    const renderedPages = await renderPdfPagesFromDataUrl(renderDataUrl);
+    if (renderedPages.length === 0) return preview;
+
+    const pages = mergeRenderedPages(preview.pages, renderedPages);
+
+    return {
+      ...preview,
+      page: pages[0] ?? preview.page,
+      pages,
+      imageDataUrl: pages[0]?.imageDataUrl ?? preview.imageDataUrl,
+      imageEngine: pages[0]?.imageDataUrl ? "pdfjs-gotenberg" : preview.imageEngine,
+    };
+  } catch (error) {
+    console.warn("Nao foi possivel renderizar o PDF do conversor para preview.", error);
+    return preview;
+  }
+}
+
+function mergeRenderedPages(
+  currentPages: ExtractedDocumentPage[] | undefined,
+  renderedPages: ExtractedDocumentPage[],
+) {
+  return renderedPages.map((page, index) => {
+    const current = currentPages?.[index];
+
+    return {
+      ...current,
+      ...page,
+      index: current?.index ?? page.index ?? index,
+      border: current?.border ?? page.border,
+    };
+  });
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function normalizeBrowserFileType(fileType: string | undefined, fileName: string | undefined) {
+  const lowerType = fileType?.toLowerCase() ?? "";
+  const lowerName = fileName?.toLowerCase() ?? "";
+
+  if (lowerType.includes("pdf") || lowerName.endsWith(".pdf")) return "application/pdf";
+  if (lowerType.includes("wordprocessingml") || lowerName.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+
+  return fileType && fileType.includes("/")
+    ? fileType
+    : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
+function defaultFileNameForType(fileType: string) {
+  return fileType.includes("pdf") ? "documento.pdf" : "documento.docx";
 }
 
 async function extractEditableElementsSafely(
@@ -230,7 +344,7 @@ function extractRenderedEditableElements(host: HTMLElement, page: ExtractedDocum
       if (!content) continue;
 
       const rect = relativeRect(graphic, pageRect);
-      if (!rect || rect.width < 6 || rect.height < 6 || rect.width > 520 || rect.height > 320) continue;
+      if (!rect || rect.width < 6 || rect.height < 6) continue;
       addImageElement(elements, content, rect, pageWidth, pageIndex);
     }
 
@@ -291,6 +405,7 @@ function addImageElement(
   const y = Math.max(0, Math.round(rect.y));
   const width = clamp(Math.round(rect.width), 8, pageWidth);
   const height = Math.max(8, Math.round(rect.height));
+  const prefix = isWatermarkRect(rect, pageWidth) ? "watermark" : "image";
   const duplicate = elements.some((element) =>
     element.type === "image" &&
     element.content === content &&
@@ -302,7 +417,7 @@ function addImageElement(
   if (duplicate) return;
 
   elements.push({
-    id: randomId("image"),
+    id: randomId(prefix),
     type: "image",
     content,
     variableRequired: true,
@@ -320,6 +435,13 @@ function addImageElement(
     underline: false,
     lineHeight: 1.15,
   });
+}
+
+function isWatermarkRect(
+  rect: { width: number; height: number },
+  pageWidth: number,
+) {
+  return rect.width >= pageWidth * 0.45 || rect.height >= 260;
 }
 
 function normalizeExtractedPages(

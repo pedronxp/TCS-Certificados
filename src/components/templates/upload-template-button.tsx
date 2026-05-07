@@ -44,6 +44,7 @@ export function UploadTemplateButton() {
         pages: extracted.pages,
         elements: [],
         pageBorder: extracted.page?.border,
+        assets: extracted.assets,
         baseDocumentMode: isDocxFile ? "native" : undefined,
       });
       const draft: TemplateImportDraft = {

@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import type { Metadata } from "next";
 import { LogIn, QrCode, SearchCheck, ShieldCheck } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
+import { SensitiveDocumentInput } from "@/components/sensitive-document-input";
 import { normalizeVerificationCode } from "@/lib/verification-code";
 
 export const metadata: Metadata = {
@@ -77,9 +78,8 @@ export default async function PublicValidationSearchPage({
                 <small className="public-field-hint">
                   Informe o CPF, RG ou documento que aparece no certificado para liberar a confer&ecirc;ncia.
                 </small>
-                <input
+                <SensitiveDocumentInput
                   name="documento"
-                  type="text"
                   required
                   autoComplete="off"
                   inputMode="text"

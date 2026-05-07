@@ -7,13 +7,12 @@
 
 "use client";
 
-/* eslint-disable @next/next/no-img-element */
-
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { Layers } from "lucide-react";
 import { useEditorStore } from "@/stores/editor-store";
 import { useCanvasInteraction } from "@/hooks/use-canvas-interaction";
 import { buildPageGeometries, canvasBounds, elementsOnPage } from "@/lib/editor/layout-engine";
+import { isPdfDataUrl } from "@/lib/pdf-preview.client";
 import { CanvasElement } from "./canvas-element";
 
 export function EditorCanvas() {
@@ -25,6 +24,7 @@ export function EditorCanvas() {
   const inlineEditId = useEditorStore((s) => s.inlineEditId);
   const activePageIndex = useEditorStore((s) => s.activePageIndex);
   const background = useEditorStore((s) => s.background);
+  const baseDocumentMode = useEditorStore((s) => s.baseDocumentMode);
   const basePages = useEditorStore((s) => s.basePages);
   const baseRenderDataUrl = useEditorStore((s) => s.baseRenderDataUrl);
   const baseImageDataUrl = useEditorStore((s) => s.baseImageDataUrl);
@@ -35,6 +35,7 @@ export function EditorCanvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const initialZoomSet = useRef(false);
+  const lastAutoFitKey = useRef("");
   const interaction = useCanvasInteraction();
 
   /* Page geometry — built from basePages (stable ref from store) */
@@ -43,20 +44,24 @@ export function EditorCanvas() {
     [basePages, width, height],
   );
   const bounds = useMemo(() => canvasBounds(pages), [pages]);
+  const fitPage = pages[activePageIndex] ?? pages[0];
+  const autoFitKey = fitPage ? `${pages.length}:${fitPage.width}:${fitPage.height}` : "";
 
   /* ─── Auto-fit Zoom on Mount ─── */
   useEffect(() => {
-    if (!containerRef.current || bounds.width === 0 || initialZoomSet.current) return;
+    if (!containerRef.current || !fitPage) return;
+    if (initialZoomSet.current && lastAutoFitKey.current === autoFitKey) return;
 
     const observer = new ResizeObserver((entries) => {
       const { width, height } = entries[0].contentRect;
-      if (width > 0 && height > 0 && !initialZoomSet.current) {
+      if (width > 0 && height > 0) {
         initialZoomSet.current = true;
+        lastAutoFitKey.current = autoFitKey;
         const paddingW = 120; // 60px on each side
         const paddingH = 80;  // 40px top/bottom
 
-        const scaleX = (width - paddingW) / bounds.width;
-        const scaleY = (height - paddingH) / bounds.height;
+        const scaleX = (width - paddingW) / fitPage.width;
+        const scaleY = (height - paddingH) / fitPage.height;
         const bestFit = Math.min(scaleX, scaleY);
 
         // Limit to 100% max, round to 2 decimal places
@@ -67,7 +72,7 @@ export function EditorCanvas() {
 
     observer.observe(containerRef.current);
     return () => observer.disconnect();
-  }, [bounds.width, bounds.height, setZoom]);
+  }, [autoFitKey, fitPage, setZoom]);
 
   /* ─── Scroll to Active Page ─── */
   useEffect(() => {
@@ -102,7 +107,12 @@ export function EditorCanvas() {
   );
 
   /* Resolve background for a page: page image → global render → global image → background */
-  const docxFallbackBg = baseRenderDataUrl || baseImageDataUrl || null;
+  const rasterRenderDataUrl = baseRenderDataUrl && !isPdfDataUrl(baseRenderDataUrl)
+    ? baseRenderDataUrl
+    : null;
+  const docxFallbackBg = baseImageDataUrl || rasterRenderDataUrl || null;
+  const hasPendingPdfBackground = isPdfDataUrl(baseRenderDataUrl);
+  const showBaseBackground = baseDocumentMode !== "editable";
 
   return (
     <div
@@ -111,12 +121,14 @@ export function EditorCanvas() {
       onWheel={handleWheel}
       onClick={handleBackgroundClick}
     >
-      <div className="te-canvas-wrapper" style={{ width: bounds.width * zoom, minHeight: bounds.height * zoom }}>
-        <div className="te-page-stack" style={{ width: bounds.width, transform: `scale(${zoom})`, transformOrigin: "top left" }}>
+      <div className="te-canvas-wrapper" style={{ width: bounds.width * zoom, height: bounds.height * zoom }}>
+        <div className="te-page-stack" style={{ width: bounds.width, height: bounds.height, transform: `scale(${zoom})`, transformOrigin: "top left" }}>
           {pages.map((page) => {
             const pageElements = elementsOnPage(elements, page.index);
             const isActive = page.index === activePageIndex;
-            const bg = page.imageDataUrl || (page.index === 0 ? (background || docxFallbackBg) : docxFallbackBg) || undefined;
+            const bg = showBaseBackground
+              ? page.imageDataUrl || (page.index === 0 ? (background || docxFallbackBg) : docxFallbackBg) || undefined
+              : page.index === 0 ? background || undefined : undefined;
 
             return (
               <div
@@ -126,7 +138,7 @@ export function EditorCanvas() {
                 }}
                 className={`te-page-frame ${isActive ? "te-page-active" : ""}`}
                 style={{
-                  left: 0,
+                  left: page.x,
                   top: page.y,
                   width: page.width,
                   height: page.height,
@@ -142,11 +154,24 @@ export function EditorCanvas() {
                   <span className="te-page-label">Página {page.index + 1}</span>
                 )}
 
+                {page.border && (
+                  <div
+                    aria-hidden="true"
+                    style={{
+                      position: "absolute",
+                      inset: page.border.inset,
+                      border: `${page.border.width}px solid ${page.border.color}`,
+                      pointerEvents: "none",
+                      zIndex: 6,
+                    }}
+                  />
+                )}
+
                 {/* Fallback when no content */}
                 {pageElements.length === 0 && !bg && (
                   <div className="te-page-fallback">
                     <Layers />
-                    <span>Adicione elementos à página</span>
+                    <span>{hasPendingPdfBackground ? "Renderizando pagina" : "Adicione elementos a pagina"}</span>
                   </div>
                 )}
 

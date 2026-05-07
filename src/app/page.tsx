@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowRight, BadgeCheck, FileSearch, LockKeyhole, ShieldCheck } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
+import { SensitiveDocumentInput } from "@/components/sensitive-document-input";
 import { getSessionUser } from "@/lib/auth";
 
 export default async function Home() {
@@ -70,11 +71,11 @@ export default async function Home() {
               </label>
               <label className="field">
                 <span className="field-label">Documento do participante</span>
-                <input
+                <SensitiveDocumentInput
                   name="documento"
-                  type="text"
                   required
                   autoComplete="off"
+                  inputMode="text"
                   placeholder="CPF, RG ou documento informado"
                 />
               </label>
