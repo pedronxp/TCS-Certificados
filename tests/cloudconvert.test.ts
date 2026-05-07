@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
-import { convertDocxToPdfWithCloudConvert } from "../src/lib/cloudconvert";
+import { convertDocxToPdfWithCloudConvert, convertOfficeToPdfWithCloudConvert } from "../src/lib/cloudconvert";
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.CLOUDCONVERT_API_KEY;
@@ -100,6 +100,86 @@ test("converts DOCX through CloudConvert job upload flow", async () => {
     "https://sync.example.test/v2/jobs/job-1",
     "https://download.example.test/certificate.pdf",
   ]);
+});
+
+test("converts PPTX through CloudConvert job upload flow", async () => {
+  process.env.CLOUDCONVERT_API_KEY = "test-key";
+  process.env.CLOUDCONVERT_API_BASE_URL = "https://api.example.test/v2";
+  process.env.CLOUDCONVERT_SYNC_API_BASE_URL = "https://sync.example.test/v2";
+
+  let createJobBody: Record<string, unknown> | null = null;
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+
+    if (url === "https://api.example.test/v2/jobs") {
+      createJobBody = JSON.parse(String(init?.body));
+      return jsonResponse({
+        data: {
+          id: "job-pptx",
+          status: "waiting",
+          tasks: [
+            {
+              id: "task-upload",
+              name: "import-pptx",
+              operation: "import/upload",
+              status: "waiting",
+              result: {
+                form: {
+                  url: "https://upload.example.test",
+                  parameters: {},
+                },
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    if (url === "https://upload.example.test") {
+      assert.equal(init?.method, "POST");
+      assert.ok(init?.body instanceof FormData);
+      return new Response(null, { status: 201 });
+    }
+
+    if (url === "https://sync.example.test/v2/jobs/job-pptx") {
+      return jsonResponse({
+        data: {
+          id: "job-pptx",
+          status: "finished",
+          tasks: [
+            {
+              id: "task-export",
+              name: "export-pdf",
+              operation: "export/url",
+              status: "finished",
+              result: {
+                files: [{ filename: "certificate.pdf", url: "https://download.example.test/pptx.pdf" }],
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    if (url === "https://download.example.test/pptx.pdf") {
+      return new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+
+  const pdf = await convertOfficeToPdfWithCloudConvert({
+    buffer: Buffer.from("pptx"),
+    inputFormat: "pptx",
+    fileName: "certificate.pptx",
+    mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  });
+
+  assert.deepEqual([...pdf ?? []], [0x25, 0x50, 0x44, 0x46]);
+  assert.equal(
+    (((createJobBody?.tasks as Record<string, Record<string, unknown>>) ?? {})["convert-pptx"] ?? {}).input_format,
+    "pptx",
+  );
 });
 
 function jsonResponse(body: unknown) {

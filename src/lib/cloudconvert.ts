@@ -32,17 +32,34 @@ type CloudConvertResponse<T> = {
   data: T;
 };
 
+type CloudConvertOfficeInput = {
+  buffer: Buffer;
+  inputFormat: string;
+  fileName?: string;
+  mimeType?: string;
+};
+
 export async function convertDocxToPdfWithCloudConvert(docxBuffer: Buffer): Promise<Buffer | null> {
+  return convertOfficeToPdfWithCloudConvert({
+    buffer: docxBuffer,
+    inputFormat: "docx",
+    fileName: "certificate.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+}
+
+export async function convertOfficeToPdfWithCloudConvert(input: CloudConvertOfficeInput): Promise<Buffer | null> {
   const config = getCloudConvertConfig();
   if (!config) return null;
 
+  const normalizedInput = normalizeOfficeInput(input);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const job = await createCloudConvertJob(config, controller.signal);
-    const uploadTask = findTask(job, "import-docx");
-    await uploadDocxToCloudConvert(uploadTask, docxBuffer, controller.signal);
+    const job = await createCloudConvertJob(config, normalizedInput.inputFormat, controller.signal);
+    const uploadTask = findTask(job, importTaskName(normalizedInput.inputFormat));
+    await uploadOfficeFileToCloudConvert(uploadTask, normalizedInput, controller.signal);
 
     const finishedJob = await waitForCloudConvertJob(config, job.id, controller.signal);
     if (finishedJob.status !== "finished") {
@@ -87,19 +104,22 @@ function getCloudConvertConfig() {
 
 async function createCloudConvertJob(
   config: NonNullable<ReturnType<typeof getCloudConvertConfig>>,
+  inputFormat: string,
   signal: AbortSignal,
 ) {
+  const importTask = importTaskName(inputFormat);
+  const convertTask = convertTaskName(inputFormat);
   const response = await cloudConvertFetch<CloudConvertJob>(config, `${config.apiUrl}/jobs`, {
     method: "POST",
     body: JSON.stringify({
       tasks: {
-        "import-docx": {
+        [importTask]: {
           operation: "import/upload",
         },
-        "convert-docx": {
+        [convertTask]: {
           operation: "convert",
-          input: "import-docx",
-          input_format: "docx",
+          input: importTask,
+          input_format: inputFormat,
           output_format: "pdf",
           engine: config.engine,
           filename: "certificate.pdf",
@@ -107,7 +127,7 @@ async function createCloudConvertJob(
         },
         "export-pdf": {
           operation: "export/url",
-          input: "convert-docx",
+          input: convertTask,
         },
       },
     }),
@@ -117,7 +137,11 @@ async function createCloudConvertJob(
   return response.data;
 }
 
-async function uploadDocxToCloudConvert(task: CloudConvertTask, docxBuffer: Buffer, signal: AbortSignal) {
+async function uploadOfficeFileToCloudConvert(
+  task: CloudConvertTask,
+  input: Required<CloudConvertOfficeInput>,
+  signal: AbortSignal,
+) {
   const form = task.result?.form;
   if (!form?.url) throw new Error("CloudConvert nao retornou formulario de upload.");
 
@@ -127,10 +151,10 @@ async function uploadDocxToCloudConvert(task: CloudConvertTask, docxBuffer: Buff
   }
   formData.append(
     "file",
-    new Blob([bufferToArrayBuffer(docxBuffer)], {
-      type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    new Blob([bufferToArrayBuffer(input.buffer)], {
+      type: input.mimeType,
     }),
-    "certificate.docx",
+    input.fileName,
   );
 
   const response = await fetch(form.url, {
@@ -142,6 +166,35 @@ async function uploadDocxToCloudConvert(task: CloudConvertTask, docxBuffer: Buff
   if (!response.ok) {
     throw new Error(`CloudConvert recusou upload: HTTP ${response.status} ${await response.text()}`);
   }
+}
+
+function normalizeOfficeInput(input: CloudConvertOfficeInput): Required<CloudConvertOfficeInput> {
+  const inputFormat = input.inputFormat.replace(/[^a-z0-9]/gi, "").toLowerCase() || "docx";
+  const fileName = input.fileName?.trim() || `certificate.${inputFormat}`;
+  const mimeType = input.mimeType?.trim() || defaultOfficeMimeType(inputFormat);
+
+  return {
+    buffer: input.buffer,
+    inputFormat,
+    fileName,
+    mimeType,
+  };
+}
+
+function defaultOfficeMimeType(inputFormat: string) {
+  if (inputFormat === "pptx") {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+
+  return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
+function importTaskName(inputFormat: string) {
+  return `import-${inputFormat}`;
+}
+
+function convertTaskName(inputFormat: string) {
+  return `convert-${inputFormat}`;
 }
 
 async function waitForCloudConvertJob(

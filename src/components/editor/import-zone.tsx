@@ -8,7 +8,7 @@ import { useCallback, useRef, useState } from "react";
 import { FileUp } from "lucide-react";
 import { useEditorStore } from "@/stores/editor-store";
 
-const ACCEPTED_EXTENSIONS = ".docx,.pdf,.png,.jpg,.jpeg,.webp";
+const ACCEPTED_EXTENSIONS = ".docx,.pptx,.pdf,.png,.jpg,.jpeg,.webp";
 
 export function ImportZone() {
   const setDocument = useEditorStore((s) => s.setDocument);
@@ -36,8 +36,8 @@ export function ImportZone() {
         return;
       }
 
-      if (ext === "docx" || ext === "pdf") {
-        /* DOCX/PDF → delegate to document extraction (will be expanded) */
+      if (ext === "docx" || ext === "pptx" || ext === "pdf") {
+        /* Office/PDF → delegate to document extraction (will be expanded) */
         const reader = new FileReader();
         reader.onload = async () => {
           const dataUrl = reader.result as string;
@@ -77,9 +77,9 @@ export function ImportZone() {
                 baseImageDataUrl: preview.imageDataUrl ?? null,
                 baseImageEngine: preview.imageEngine ?? null,
                 baseAssets: preview.assets ?? [],
-                baseDocumentMode: ext === "docx" ? "native" : null,
+                baseDocumentMode: ext === "docx" || ext === "pptx" ? "native" : null,
               });
-              if (ext === "docx") setElements([]);
+              if (ext === "docx" || ext === "pptx") setElements([]);
             }
           } catch (err) {
             console.error("Document extraction failed:", err);
@@ -89,7 +89,7 @@ export function ImportZone() {
         return;
       }
 
-      alert("Formato não suportado. Use DOCX, PDF ou imagem (PNG/JPG/WebP).");
+      alert("Formato não suportado. Use DOCX, PPTX, PDF ou imagem (PNG/JPG/WebP).");
     },
     [setDocument, setElements, pushHistory],
   );
@@ -127,7 +127,7 @@ export function ImportZone() {
         <FileUp />
         <span>Arraste ou clique para importar</span>
         <small style={{ color: "var(--text-muted)", fontSize: "0.72rem" }}>
-          DOCX, PDF, PNG, JPG
+          DOCX, PPTX, PDF, PNG, JPG
         </small>
         <input
           ref={inputRef}

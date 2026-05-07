@@ -5,12 +5,13 @@ import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf
 import PizZip from "pizzip";
 import QRCode from "qrcode";
 import { fillTemplateText, normalizeVariableKey, normalizeVisualDocxLayout, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import { convertDocxToPdfWithCloudConvert, convertOfficeToPdfWithCloudConvert as convertOfficeToPdfWithCloudConvertCloud } from "@/lib/cloudconvert";
 import { convertDocxToPdfWithGotenberg, convertOfficeToPdfWithGotenberg } from "@/lib/gotenberg";
 import { convertDocxToPdfBuffer, convertOfficeToPdfBuffer } from "@/lib/libreoffice";
 import { buildVerificationTemplateValues } from "@/lib/verification-code";
 
 export const DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE =
-  "Conversor DOCX para PDF indisponivel. Configure GOTENBERG_URL com uma instancia Gotenberg externa (gratuita) ou LIBREOFFICE_PATH em ambiente local.";
+  "Conversor Office para PDF indisponivel. Configure GOTENBERG_URL, CLOUDCONVERT_API_KEY ou LIBREOFFICE_PATH em ambiente local.";
 
 export type RenderInput = {
   template: {
@@ -91,6 +92,9 @@ export async function renderDocxBuffer(input: RenderInput) {
   const layout = parseRenderLayout(input.template.layout);
   if (isNativeDocxBaseLayout(layout)) {
     return renderDocxFromBaseTemplate(input, layout);
+  }
+  if (isNativePptxBaseLayout(layout)) {
+    return renderDocxFromNativePptxBaseTemplate(input, layout);
   }
   const values = buildRenderValues(input);
 
@@ -197,6 +201,9 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
   const libreOfficePdf = await convertDocxToPdfBuffer(docxBuffer);
   if (libreOfficePdf) return Buffer.from(libreOfficePdf);
 
+  const cloudConvertPdf = await convertDocxToPdfWithCloudConvert(docxBuffer);
+  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
+
   return null;
 }
 
@@ -213,6 +220,14 @@ async function renderPdfFromNativePptxBaseTemplate(input: RenderInput, layout: T
 
   const libreOfficePdf = await convertOfficeToPdfBuffer(pptxBuffer, "pptx");
   if (libreOfficePdf) return Buffer.from(libreOfficePdf);
+
+  const cloudConvertPdf = await convertOfficeToPdfWithCloudConvertCloud({
+    buffer: pptxBuffer,
+    inputFormat: inferOfficeInputFormat(layout, "pptx"),
+    fileName: layout.baseFileName || "certificate.pptx",
+    mimeType,
+  });
+  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
 
   return null;
 }
@@ -302,6 +317,55 @@ function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) 
   return Buffer.from(document.getZip().generate({ type: "nodebuffer" }));
 }
 
+async function renderDocxFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
+  const pptxBuffer = await renderPptxFromBaseTemplate(input, layout);
+  const zip = await JSZip.loadAsync(pptxBuffer);
+  const lines = await extractPptxPlainTextLines(zip);
+  const hasVerificationCode = lines.some((line) => line.includes(input.verificationCode));
+  const children = [
+    new Paragraph({
+      children: [
+        new TextRun({
+          text: input.template.name,
+          bold: true,
+          size: 36,
+        }),
+      ],
+    }),
+    ...lines.map((line) =>
+      new Paragraph({
+        children: [new TextRun({ text: line, size: 24 })],
+        spacing: { before: 160 },
+      }),
+    ),
+  ];
+
+  if (!hasVerificationCode) {
+    children.push(
+      new Paragraph({
+        children: [
+          new TextRun({
+            text: `Codigo de validacao: ${input.verificationCode}`,
+            size: 20,
+          }),
+        ],
+        spacing: { before: 400 },
+      }),
+    );
+  }
+
+  const document = new Document({
+    sections: [
+      {
+        properties: {},
+        children,
+      },
+    ],
+  });
+
+  return Buffer.from(await Packer.toBuffer(document));
+}
+
 async function renderPptxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const zip = await JSZip.loadAsync(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
   const xmlFiles = await readPptxXmlFiles(zip);
@@ -317,6 +381,30 @@ async function renderPptxFromBaseTemplate(input: RenderInput, layout: TemplateLa
   }
 
   return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
+}
+
+async function extractPptxPlainTextLines(zip: JSZip) {
+  const slideNames = Object.keys(zip.files)
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort(comparePptxSlideNames);
+  const lines: string[] = [];
+
+  for (const name of slideNames) {
+    const xml = await zip.file(name)?.async("text");
+    const text = xml ? extractPptxTextNodes(xml) : "";
+    if (text) lines.push(text);
+  }
+
+  return lines;
+}
+
+function extractPptxTextNodes(xml: string) {
+  return [...xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)]
+    .map((match) => decodeOfficeXmlText(match[1] ?? "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function applyDocxAssetReplacementsToZip(zip: PizZip, layout: TemplateLayout) {
@@ -688,6 +776,32 @@ function resolveTemplateValue(rawKey: string, values: Record<string, string>) {
   const originalKey = String(rawKey).trim();
   const normalizedKey = normalizeVariableKey(originalKey);
   return values[originalKey] ?? values[normalizedKey] ?? "";
+}
+
+function inferOfficeInputFormat(layout: TemplateLayout, fallback: "docx" | "pptx") {
+  const fileName = layout.baseFileName?.toLowerCase() ?? "";
+  const fileType = layout.baseFileType?.toLowerCase() ?? "";
+
+  if (fileName.endsWith(".pptx") || fileType.includes("presentationml")) return "pptx";
+  if (fileName.endsWith(".docx") || fileType.includes("wordprocessingml")) return "docx";
+  return fallback;
+}
+
+function comparePptxSlideNames(left: string, right: string) {
+  return pptxSlideNumber(left) - pptxSlideNumber(right);
+}
+
+function pptxSlideNumber(value: string) {
+  return Number(value.match(/slide(\d+)\.xml/i)?.[1] ?? 0);
+}
+
+function decodeOfficeXmlText(value: string) {
+  return value
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&amp;", "&");
 }
 
 function escapeXml(value: string) {

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Document, Packer, Paragraph } from "docx";
+import JSZip from "jszip";
 import PizZip from "pizzip";
 import { renderCertificateHtml, renderDocxBuffer } from "../src/lib/render-certificate";
 
 const docxMimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const pptxMimeType = "application/vnd.openxmlformats-officedocument.presentationml.presentation";
 
 test("fills DOCX validation code placeholders with the full verification code", async () => {
   const baseDocx = new Document({
@@ -86,4 +88,49 @@ test("renders multiline styled text consistently in certificate HTML", async () 
   assert.match(html, /font-style:italic/);
   assert.match(html, /text-decoration:underline/);
   assert.match(html, /line-height:1.5/);
+});
+
+test("fills PPTX placeholders when generating the fallback DOCX", async () => {
+  const basePptx = new JSZip();
+  basePptx.file(
+    "ppt/slides/slide1.xml",
+    [
+      '<p:sld xmlns:p="p" xmlns:a="a">',
+      "<a:t>Aluno {{NOME}}</a:t>",
+      "<a:t>Documento {CPF}</a:t>",
+      "<a:t>Codigo {{COD}}</a:t>",
+      "</p:sld>",
+    ].join(""),
+  );
+  const baseBuffer = Buffer.from(await basePptx.generateAsync({ type: "nodebuffer" }));
+
+  const output = await renderDocxBuffer({
+    template: {
+      name: "Rapel",
+      width: 1280,
+      height: 720,
+      background: null,
+      layout: {
+        baseDocumentMode: "native",
+        baseFileName: "Rapel.pptx",
+        baseFileType: pptxMimeType,
+        baseFileDataUrl: `data:${pptxMimeType};base64,${baseBuffer.toString("base64")}`,
+        elements: [],
+      },
+    },
+    values: {
+      nome: "Maria Silva",
+      cpf: "123.456.789-00",
+    },
+    verificationCode: "TCS-BR-2026-0099",
+    appUrl: "http://localhost:3000",
+  });
+
+  const xml = new PizZip(output).file("word/document.xml")?.asText() ?? "";
+
+  assert.match(xml, /Maria Silva/);
+  assert.match(xml, /123\.456\.789-00/);
+  assert.match(xml, /TCS-BR-2026-0099/);
+  assert.doesNotMatch(xml, /\{\{NOME\}\}/);
+  assert.doesNotMatch(xml, /\{CPF\}/);
 });

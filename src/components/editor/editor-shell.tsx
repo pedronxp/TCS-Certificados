@@ -97,10 +97,11 @@ export function EditorShell({ initial }: EditorShellProps) {
       s.baseRenderDataUrl ||
       s.baseImageDataUrl;
     const isDocx = isDocxSource(s.baseFileName, s.baseFileType, s.baseFileDataUrl);
+    const isOffice = isOfficeSource(s.baseFileName, s.baseFileType, s.baseFileDataUrl);
     const needsEditableRefresh =
       isDocx && s.baseDocumentMode === "editable" && s.elements.length === 0;
     const needsPdfRefresh =
-      isDocx &&
+      isOffice &&
       s.baseImageEngine !== "pdfjs-gotenberg" &&
       !isPdfDataUrl(s.baseRenderDataUrl);
 
@@ -240,5 +241,22 @@ function isDocxSource(
     lowerName.endsWith(".docx") ||
     lowerType.includes("wordprocessingml") ||
     lowerDataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml")
+  );
+}
+
+function isOfficeSource(
+  fileName: string | null,
+  fileType: string | null,
+  dataUrl: string | null,
+) {
+  const lowerName = fileName?.toLowerCase() ?? "";
+  const lowerType = fileType?.toLowerCase() ?? "";
+  const lowerDataUrl = dataUrl?.toLowerCase() ?? "";
+
+  return (
+    isDocxSource(fileName, fileType, dataUrl) ||
+    lowerName.endsWith(".pptx") ||
+    lowerType.includes("presentationml") ||
+    lowerDataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.presentationml")
   );
 }

@@ -119,7 +119,8 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
   );
   const hasUnsavedChanges = currentSnapshot !== savedSnapshot;
   const isDocxTemplate = isDocxLayout(layout);
-  const editorModeLabel = isDocxTemplate ? "Editor DOCX" : "Editor de documento";
+  const isPptxTemplate = isPptxLayout(layout);
+  const editorModeLabel = isDocxTemplate ? "Editor DOCX" : isPptxTemplate ? "Editor PPTX" : "Editor de documento";
   const baseFileLabel = layout.baseFileName ?? name;
   const hasImportedBase = Boolean(background || layout.baseRenderDataUrl || layout.baseImageDataUrl || layout.baseFileDataUrl || layout.basePreviewHtml);
   const hasVisualBase = hasVisualBasePreview(layout);
@@ -242,7 +243,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
   }, [initial]);
 
   useEffect(() => {
-    if (!layout.baseFileDataUrl || !layout.baseFileType?.includes("wordprocessingml")) return;
+    if (!layout.baseFileDataUrl || !isOfficeSource(layout.baseFileName, layout.baseFileType, layout.baseFileDataUrl)) return;
     const hasAnyBasePageMetadata = (layout.basePages?.length ?? 0) > 0;
     if (
       hasUsableBasePages(layout.basePages) ||
@@ -283,7 +284,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
         };
       });
     }).catch((error) => {
-      console.warn("Nao foi possivel atualizar o preview multipagina do DOCX.", error);
+      console.warn("Nao foi possivel atualizar o preview multipagina do documento.", error);
     });
 
     return () => {
@@ -953,8 +954,8 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
                 {isDocxTemplate ? <FileText /> : <Layers />}
               </span>
               <div>
-                <strong>{isDocxTemplate ? "Documento DOCX" : "Documento do modelo"}</strong>
-                <small>{isDocxTemplate ? "Word / Google Docs" : "PDF, imagem ou DOCX"}</small>
+                <strong>{isDocxTemplate ? "Documento DOCX" : isPptxTemplate ? "Documento PPTX" : "Documento do modelo"}</strong>
+                <small>{isDocxTemplate ? "Word / Google Docs" : isPptxTemplate ? "PowerPoint" : "PDF, imagem, DOCX ou PPTX"}</small>
               </div>
             </div>
 
@@ -964,7 +965,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
                 <strong>{layout.baseFileName ?? "Nenhum arquivo importado"}</strong>
               </div>
               <span className="te-docx-badge">
-                {isDocxTemplate ? (isEditableDocxBase ? "Editavel" : "DOCX") : hasImportedBase ? "Base visual" : "Novo"}
+                {isDocxTemplate ? (isEditableDocxBase ? "Editavel" : "DOCX") : isPptxTemplate ? "PPTX" : hasImportedBase ? "Base visual" : "Novo"}
               </span>
             </div>
 
@@ -1694,6 +1695,37 @@ function isDocxLayout(layout: TemplateLayout) {
     fileType.includes("wordprocessingml") ||
     fileName.endsWith(".docx") ||
     dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml")
+  );
+}
+
+function isPptxLayout(layout: TemplateLayout) {
+  const fileType = layout.baseFileType?.toLowerCase() ?? "";
+  const fileName = layout.baseFileName?.toLowerCase() ?? "";
+  const dataUrl = layout.baseFileDataUrl?.toLowerCase() ?? "";
+
+  return (
+    fileType.includes("presentationml") ||
+    fileName.endsWith(".pptx") ||
+    dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.presentationml")
+  );
+}
+
+function isOfficeSource(
+  fileName: string | undefined,
+  fileType: string | undefined,
+  dataUrl: string | undefined,
+) {
+  const lowerName = fileName?.toLowerCase() ?? "";
+  const lowerType = fileType?.toLowerCase() ?? "";
+  const lowerDataUrl = dataUrl?.toLowerCase() ?? "";
+
+  return (
+    lowerName.endsWith(".docx") ||
+    lowerName.endsWith(".pptx") ||
+    lowerType.includes("wordprocessingml") ||
+    lowerType.includes("presentationml") ||
+    lowerDataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml") ||
+    lowerDataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.presentationml")
   );
 }
 

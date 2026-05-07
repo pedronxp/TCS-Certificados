@@ -111,7 +111,7 @@ async function extractPdfPages(pdfBuffer: Buffer, fallbackPage: DocxPreviewPage)
 }
 
 function extractTextNodes(xml: string) {
-  const parts = [...xml.matchAll(/<a:t[^>]*>([\s\S]*?)<\/a:t>/g)]
+  const parts = [...xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g)]
     .map((match) => decodeXmlText(match[1] ?? "").trim())
     .filter(Boolean);
 
