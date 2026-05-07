@@ -1,12 +1,14 @@
 import { Prisma } from "@prisma/client";
 import {
   extractVariables,
+  labelFromKey,
   normalizeVariableKey,
   uploadedBaseLayout,
   type TemplateLayout,
   type TemplateVariableDefinition,
 } from "@/lib/certificate-layout";
 import { buildDocxPreview } from "@/lib/docx-preview-service";
+import { buildPptxPreview } from "@/lib/pptx-preview-service";
 import { prisma } from "@/lib/prisma";
 
 type ImportedTemplateDraft = {
@@ -19,7 +21,7 @@ type ImportedTemplateDraft = {
   layout: TemplateLayout;
 };
 
-type ImportTemplateInput = {
+export type ImportTemplateInput = {
   fileName: string;
   fileType?: string;
   buffer: Buffer;
@@ -30,6 +32,10 @@ type ImportTemplateInput = {
   height?: number;
   orientation?: "landscape" | "portrait";
   variableDefinitions?: TemplateVariableDefinition[];
+};
+
+type SyncTemplateInput = ImportTemplateInput & {
+  matchNames?: string[];
 };
 
 const DEFAULT_PAGE = {
@@ -55,6 +61,57 @@ export async function createTemplateFromImportedFile(input: ImportTemplateInput)
       variables: { create: variables },
     },
     include: { variables: true },
+  });
+}
+
+export async function syncTemplateFromImportedFile(input: SyncTemplateInput) {
+  const draft = await buildImportedTemplateDraft(input);
+  const variables = extractVariables(draft.layout);
+  const existing = await findExistingTemplate(draft.name, input.matchNames);
+  const data = {
+    name: draft.name,
+    description: draft.description,
+    width: draft.width,
+    height: draft.height,
+    orientation: draft.orientation,
+    background: draft.background,
+    layout: draft.layout as Prisma.InputJsonValue,
+  };
+
+  if (existing) {
+    return prisma.certificateTemplate.update({
+      where: { id: existing.id },
+      data: {
+        ...data,
+        variables: {
+          deleteMany: {},
+          create: variables,
+        },
+      },
+      include: { variables: true },
+    });
+  }
+
+  return prisma.certificateTemplate.create({
+    data: {
+      ...data,
+      createdById: input.createdById,
+      variables: {
+        create: variables,
+      },
+    },
+    include: { variables: true },
+  });
+}
+
+async function findExistingTemplate(name: string, matchNames: string[] | undefined) {
+  const names = [...new Set([name, ...(matchNames ?? [])].map((item) => item.trim()).filter(Boolean))];
+  if (!names.length) return null;
+
+  return prisma.certificateTemplate.findFirst({
+    where: { name: { in: names } },
+    select: { id: true },
+    orderBy: { updatedAt: "desc" },
   });
 }
 
@@ -93,6 +150,37 @@ async function buildImportedTemplateDraft(input: ImportTemplateInput): Promise<I
       orientation,
       background: null,
       layout: withVariableDefinitions(layout, input.variableDefinitions),
+    };
+  }
+
+  if (isPptx(input.fileName, fileType)) {
+    const preview = await buildPptxPreview(input.buffer);
+    const orientation = input.orientation ?? preview.page.orientation;
+    const layout = uploadedBaseLayout({
+      fileName: input.fileName,
+      fileType,
+      dataUrl,
+      previewHtml: preview.previewHtml,
+      renderDataUrl: preview.renderDataUrl,
+      renderFileType: preview.renderFileType,
+      renderEngine: preview.renderEngine,
+      pages: preview.pages,
+      elements: [],
+      baseDocumentMode: "native",
+    });
+    const variableDefinitions = mergeVariableDefinitions(
+      preview.variables.map((key) => ({ key, label: labelFromKey(key), required: true })),
+      input.variableDefinitions,
+    );
+
+    return {
+      name,
+      description,
+      width: positiveNumberOrDefault(input.width, preview.page.width),
+      height: positiveNumberOrDefault(input.height, preview.page.height),
+      orientation,
+      background: null,
+      layout: withVariableDefinitions(layout, variableDefinitions),
     };
   }
 
@@ -157,6 +245,7 @@ function inferFileType(fileName: string, fileType: string | undefined) {
 
   const lower = fileName.toLowerCase();
   if (lower.endsWith(".docx")) return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (lower.endsWith(".pptx")) return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   if (lower.endsWith(".pdf")) return "application/pdf";
   if (lower.endsWith(".png")) return "image/png";
   if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
@@ -165,6 +254,30 @@ function inferFileType(fileName: string, fileType: string | undefined) {
 
 function isDocx(fileName: string, fileType: string) {
   return fileType.includes("wordprocessingml") || fileName.toLowerCase().endsWith(".docx");
+}
+
+function isPptx(fileName: string, fileType: string) {
+  return fileType.includes("presentationml") || fileName.toLowerCase().endsWith(".pptx");
+}
+
+function mergeVariableDefinitions(
+  ...groups: Array<TemplateVariableDefinition[] | undefined>
+) {
+  const definitions = new Map<string, TemplateVariableDefinition>();
+
+  for (const group of groups) {
+    for (const definition of group ?? []) {
+      const key = normalizeVariableKey(definition.key);
+      if (!key) continue;
+      definitions.set(key, {
+        key,
+        label: definition.label || labelFromKey(key),
+        required: definition.required,
+      });
+    }
+  }
+
+  return [...definitions.values()];
 }
 
 function bufferToDataUrl(buffer: Buffer, mimeType: string) {

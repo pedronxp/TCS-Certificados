@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   formatTemplateFieldValue,
+  dedupeTemplateFieldVariables,
   getTemplateDocumentMode,
   getTemplateFieldMetadata,
   getTemplateVariableLabel,
   getTemplateVariablePlaceholder,
+  mirrorTemplateFieldValues,
   validateTemplateFieldValue,
 } from "../src/lib/template-variable-fields";
 
@@ -48,4 +50,35 @@ test("formats and validates CPF, RG and UF fields", () => {
   assert.equal(formatTemplateFieldValue({ key: "id", label: "Id" }, "mg 12.345.678"), "MG 12.345.678");
   assert.equal(validateTemplateFieldValue({ key: "uf", label: "Uf" }, "MG"), null);
   assert.match(validateTemplateFieldValue({ key: "uf", label: "Uf" }, "XX") ?? "", /UF/);
+});
+
+test("formats period fields as month and year", () => {
+  assert.equal(
+    formatTemplateFieldValue({ key: "periodo", label: "Periodo" }, "2019-09"),
+    "setembro de 2019",
+  );
+  assert.equal(
+    formatTemplateFieldValue({ key: "periodo", label: "Periodo" }, "01/09/2019"),
+    "setembro de 2019",
+  );
+});
+
+test("mirrors equivalent fields such as nome/aluno and hora/horas", () => {
+  const variables = [
+    { key: "nome", label: "Nome" },
+    { key: "aluno", label: "Aluno" },
+    { key: "horas", label: "Horas" },
+    { key: "hora", label: "Hora" },
+  ];
+
+  assert.deepEqual(mirrorTemplateFieldValues(variables, { nome: "Ana", horas: "16" }), {
+    nome: "Ana",
+    horas: "16",
+    aluno: "Ana",
+    hora: "16",
+  });
+  assert.deepEqual(dedupeTemplateFieldVariables(variables).map((variable) => variable.key), [
+    "nome",
+    "horas",
+  ]);
 });

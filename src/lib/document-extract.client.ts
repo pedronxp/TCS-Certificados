@@ -32,7 +32,7 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
     return buildPdfPreviewFromDataUrl(await readFileAsDataUrl(file), file.type || "application/pdf");
   }
 
-  if (!isDocx(file)) {
+  if (!isDocx(file) && !isPptx(file)) {
     return {
       previewHtml: undefined,
       editable: false,
@@ -45,9 +45,9 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
   const serverPreview = await extractDocumentPreviewFromApi(file);
   if (serverPreview) {
     const visualPreview = await withPdfPageImages(serverPreview);
-    const page = visualPreview.page ?? await extractDocxPage(arrayBuffer);
+    const page = visualPreview.page ?? (isDocx(file) ? await extractDocxPage(arrayBuffer) : undefined);
     const pages = normalizeExtractedPages(visualPreview.pages, page);
-    const elements = visualPreview.editable
+    const elements = isDocx(file) && visualPreview.editable
       ? visualPreview.elements.length > 0
         ? visualPreview.elements
         : await extractEditableElementsSafely(arrayBuffer, page)
@@ -59,6 +59,15 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
       elements,
       page: growPageToFit(page, elements),
       pages,
+    };
+  }
+
+  if (isPptx(file)) {
+    return {
+      previewHtml: undefined,
+      editable: false,
+      elements: [],
+      variables: [],
     };
   }
 
@@ -155,6 +164,13 @@ function isDocx(file: File) {
   return (
     file.type.includes("wordprocessingml") ||
     file.name.toLowerCase().endsWith(".docx")
+  );
+}
+
+function isPptx(file: File) {
+  return (
+    file.type.includes("presentationml") ||
+    file.name.toLowerCase().endsWith(".pptx")
   );
 }
 
@@ -255,6 +271,9 @@ function normalizeBrowserFileType(fileType: string | undefined, fileName: string
   if (lowerType.includes("wordprocessingml") || lowerName.endsWith(".docx")) {
     return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   }
+  if (lowerType.includes("presentationml") || lowerName.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
 
   return fileType && fileType.includes("/")
     ? fileType
@@ -262,6 +281,7 @@ function normalizeBrowserFileType(fileType: string | undefined, fileName: string
 }
 
 function defaultFileNameForType(fileType: string) {
+  if (fileType.includes("presentationml")) return "documento.pptx";
   return fileType.includes("pdf") ? "documento.pdf" : "documento.docx";
 }
 

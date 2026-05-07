@@ -1,11 +1,12 @@
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import Docxtemplater from "docxtemplater";
+import JSZip from "jszip";
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import PizZip from "pizzip";
 import QRCode from "qrcode";
 import { fillTemplateText, normalizeVariableKey, normalizeVisualDocxLayout, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
-import { convertDocxToPdfWithGotenberg } from "@/lib/gotenberg";
-import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
+import { convertDocxToPdfWithGotenberg, convertOfficeToPdfWithGotenberg } from "@/lib/gotenberg";
+import { convertDocxToPdfBuffer, convertOfficeToPdfBuffer } from "@/lib/libreoffice";
 import { buildVerificationTemplateValues } from "@/lib/verification-code";
 
 export const DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE =
@@ -48,6 +49,12 @@ export async function renderPdfBuffer(input: RenderInput) {
   }
   if (isNativeDocxBaseLayout(layout)) {
     const nativePdf = await renderPdfFromNativeDocxBaseTemplate(input, layout);
+    if (nativePdf) return nativePdf;
+
+    throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
+  }
+  if (isNativePptxBaseLayout(layout)) {
+    const nativePdf = await renderPdfFromNativePptxBaseTemplate(input, layout);
     if (nativePdf) return nativePdf;
 
     throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
@@ -193,6 +200,23 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
   return null;
 }
 
+async function renderPdfFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
+  const pptxBuffer = await renderPptxFromBaseTemplate(input, layout);
+  const mimeType = layout.baseFileType || "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+  const gotenbergPdf = await convertOfficeToPdfWithGotenberg({
+    buffer: pptxBuffer,
+    fileName: "certificate.pptx",
+    mimeType,
+  });
+  if (gotenbergPdf) return Buffer.from(gotenbergPdf);
+
+  const libreOfficePdf = await convertOfficeToPdfBuffer(pptxBuffer, "pptx");
+  if (libreOfficePdf) return Buffer.from(libreOfficePdf);
+
+  return null;
+}
+
 async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
   const pdfDocument = await PDFDocument.create();
   const page = pdfDocument.addPage([input.template.width, input.template.height]);
@@ -276,6 +300,23 @@ function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) 
   document.render(values);
 
   return Buffer.from(document.getZip().generate({ type: "nodebuffer" }));
+}
+
+async function renderPptxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
+  const zip = await JSZip.loadAsync(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
+  const xmlFiles = await readPptxXmlFiles(zip);
+  const sourceText = [
+    layout.basePreviewHtml ?? "",
+    ...xmlFiles.map((file) => file.content),
+  ].join("\n");
+  const values = expandTemplateValues(buildRenderValues(input), sourceText);
+
+  for (const file of xmlFiles) {
+    const content = fillOfficeXmlTemplate(file.content, values);
+    if (content !== file.content) zip.file(file.name, content);
+  }
+
+  return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
 }
 
 function applyDocxAssetReplacementsToZip(zip: PizZip, layout: TemplateLayout) {
@@ -552,6 +593,16 @@ function isNativeDocxBaseLayout(layout: TemplateLayout) {
   return layout.baseDocumentMode !== "editable" && Boolean(layout.baseFileType?.includes("wordprocessingml") && layout.baseFileDataUrl);
 }
 
+function isNativePptxBaseLayout(layout: TemplateLayout) {
+  const fileName = layout.baseFileName?.toLowerCase() ?? "";
+  const fileType = layout.baseFileType?.toLowerCase() ?? "";
+
+  return layout.baseDocumentMode !== "editable" && Boolean(
+    layout.baseFileDataUrl &&
+      (fileType.includes("presentationml") || fileName.endsWith(".pptx")),
+  );
+}
+
 function resolveImageOpacity(element: { id: string }) {
   return element.id.startsWith("watermark-") ? 0.16 : 1;
 }
@@ -588,6 +639,29 @@ function fillTemplateHtml(html: string, values: Record<string, string>) {
   });
 }
 
+async function readPptxXmlFiles(zip: JSZip) {
+  const files: Array<{ name: string; content: string }> = [];
+
+  for (const name of Object.keys(zip.files)) {
+    if (!/^ppt\/.+\.xml$/i.test(name)) continue;
+    const file = zip.file(name);
+    if (!file) continue;
+    files.push({ name, content: await file.async("text") });
+  }
+
+  return files;
+}
+
+function fillOfficeXmlTemplate(xml: string, values: Record<string, string>) {
+  return xml
+    .replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (_, rawKey) =>
+      escapeXml(resolveTemplateValue(rawKey, values)),
+    )
+    .replace(/(^|[^{])\{\s*([A-Za-z0-9_\u00c0-\u017f ]+?)\s*\}([^}]|$)/g, (_, prefix, rawKey, suffix) =>
+      `${prefix}${escapeXml(resolveTemplateValue(rawKey, values))}${suffix}`,
+    );
+}
+
 function expandTemplateValues(values: Record<string, string>, sourceText: string) {
   const expanded = { ...values };
 
@@ -599,5 +673,28 @@ function expandTemplateValues(values: Record<string, string>, sourceText: string
     }
   }
 
+  for (const match of sourceText.matchAll(/(^|[^{])\{\s*([A-Za-z0-9_\u00c0-\u017f ]+?)\s*\}([^}]|$)/g)) {
+    const originalKey = String(match[2]).trim();
+    const normalizedKey = normalizeVariableKey(originalKey);
+    if (expanded[originalKey] === undefined && values[normalizedKey] !== undefined) {
+      expanded[originalKey] = values[normalizedKey];
+    }
+  }
+
   return expanded;
+}
+
+function resolveTemplateValue(rawKey: string, values: Record<string, string>) {
+  const originalKey = String(rawKey).trim();
+  const normalizedKey = normalizeVariableKey(originalKey);
+  return values[originalKey] ?? values[normalizedKey] ?? "";
+}
+
+function escapeXml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
 }

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { TemplateVariable } from "@prisma/client";
 import { BadgeCheck, Eye, LoaderCircle, X } from "lucide-react";
-import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
+import { formatDateLongPtBr, formatMonthYearPtBr, isDateField } from "@/lib/date-fields";
 import {
   formatTemplateFieldValue,
   getTemplateDocumentMode,
@@ -12,6 +12,7 @@ import {
   getTemplateVariableDescription,
   getTemplateVariableLabel,
   getTemplateVariablePlaceholder,
+  mirrorTemplateFieldValues,
   onlyDigits,
   validateTemplateFieldValue,
   type TemplateDocumentMode,
@@ -59,8 +60,8 @@ export function IssueForm({
     [currentUser, variables],
   );
   const effectiveValues = useMemo(
-    () => ({ ...values, ...lockedValues }),
-    [lockedValues, values],
+    () => mirrorTemplateFieldValues(variables, { ...values, ...lockedValues }),
+    [lockedValues, values, variables],
   );
   const requiredVariables = variables.filter((variable) => variable.required);
   const missingRequiredVariables = requiredVariables.filter(
@@ -363,6 +364,17 @@ function CertificateField({
             onDateValueChange(iso, formatDateLongPtBr(iso));
           }}
         />
+      ) : isPeriodField(variable) ? (
+        <input
+          type="month"
+          required={variable.required}
+          value={dateValue}
+          disabled={disabled}
+          onChange={(event) => {
+            const iso = event.target.value;
+            onDateValueChange(iso, formatMonthYearPtBr(iso));
+          }}
+        />
       ) : documentMode ? (
         <div className="space-y-1.5">
           <div className="relative">
@@ -413,6 +425,10 @@ function getFieldLabel(variable: { key: string; label: string }) {
 
 function isWideField(variable: { key: string; label: string }) {
   return getTemplateFieldMetadata(variable).kind === "recipient_name";
+}
+
+function isPeriodField(variable: { key: string; label: string }) {
+  return getTemplateFieldMetadata(variable).kind === "period";
 }
 
 function getLockedUserValues(

@@ -15,17 +15,22 @@ const COMMON_WINDOWS_PATHS = [
 let cachedExecutable: string | null | undefined;
 
 export async function convertDocxToPdfBuffer(docxBuffer: Buffer) {
+  return convertOfficeToPdfBuffer(docxBuffer, "docx");
+}
+
+export async function convertOfficeToPdfBuffer(officeBuffer: Buffer, extension: string) {
   const executable = await findLibreOfficeExecutable();
   if (!executable) return null;
 
-  const tempDir = path.join(os.tmpdir(), `tcs-docx-${randomUUID()}`);
-  const inputPath = path.join(tempDir, "input.docx");
+  const safeExtension = extension.replace(/[^a-z0-9]/gi, "").toLowerCase() || "docx";
+  const tempDir = path.join(os.tmpdir(), `tcs-office-${randomUUID()}`);
+  const inputPath = path.join(tempDir, `input.${safeExtension}`);
   const outputPath = path.join(tempDir, "input.pdf");
 
   await mkdir(tempDir, { recursive: true });
 
   try {
-    await writeFile(inputPath, docxBuffer);
+    await writeFile(inputPath, officeBuffer);
     await execFileAsync(executable, [
       "--headless",
       "--nologo",

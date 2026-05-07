@@ -1,6 +1,7 @@
 import { buildDefaultCertificateDeleteAt } from "@/lib/certificate-validity";
 import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
+import { formatTemplateFieldValue, mirrorTemplateFieldValues } from "@/lib/template-variable-fields";
 import {
   DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE,
   renderDocxBuffer,
@@ -40,7 +41,10 @@ export async function issueCertificate({
   });
   if (!issuedBy) throw new Error("Usuário emissor não encontrado.");
 
-  const securedValues = applyIssuerRestrictions(values, template.variables, issuedBy);
+  const securedValues = mirrorTemplateFieldValues(
+    template.variables,
+    applyIssuerRestrictions(values, template.variables, issuedBy),
+  );
 
   for (const variable of template.variables) {
     if (isSystemCertificateVariableKey(variable.key)) continue;
@@ -54,7 +58,7 @@ export async function issueCertificate({
   const verificationCode = await reserveNextVerificationCode(issuedAt);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const issueValues = { ...securedValues, ...buildVerificationTemplateValues(verificationCode) };
-  const normalizedValues = normalizeIssueValues(normalizeDateValues(issueValues, template.variables));
+  const normalizedValues = normalizeIssueValues(normalizeTemplateFieldValues(issueValues, template.variables));
   const recipientName = findValue(normalizedValues, ["nome", "name", "participante", "aluno", "titular"]) || "Sem nome";
   const recipientEmail = findValue(normalizedValues, ["email", "e_mail"]) || undefined;
   const recipientDocument = findDocumentValue(normalizedValues);
@@ -143,7 +147,10 @@ export async function renderCertificatePreviewPdf({
   });
   if (!issuedBy) throw new Error("Usuário emissor não encontrado.");
 
-  const securedValues = applyIssuerRestrictions(values, template.variables, issuedBy);
+  const securedValues = mirrorTemplateFieldValues(
+    template.variables,
+    applyIssuerRestrictions(values, template.variables, issuedBy),
+  );
 
   for (const variable of template.variables) {
     if (isSystemCertificateVariableKey(variable.key)) continue;
@@ -153,7 +160,7 @@ export async function renderCertificatePreviewPdf({
     }
   }
 
-  const normalizedValues = normalizeIssueValues(normalizeDateValues(securedValues, template.variables));
+  const normalizedValues = normalizeIssueValues(normalizeTemplateFieldValues(securedValues, template.variables));
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const previewCode = "PREVIA";
   const pdf = await renderPdfBufferSafely({
@@ -327,17 +334,19 @@ function applyIssuerRestrictions(
   return secured;
 }
 
-function normalizeDateValues(
+function normalizeTemplateFieldValues(
   values: Record<string, string>,
   variables: Array<{ key: string; label: string }>,
 ) {
   const normalized = { ...values };
 
   for (const variable of variables) {
-    if (!isDateField(variable)) continue;
-
     const value = values[variable.key];
-    if (value) normalized[variable.key] = formatDateLongPtBr(value);
+    if (!value) continue;
+
+    normalized[variable.key] = isDateField(variable)
+      ? formatDateLongPtBr(value)
+      : formatTemplateFieldValue(variable, value);
   }
 
   return normalized;

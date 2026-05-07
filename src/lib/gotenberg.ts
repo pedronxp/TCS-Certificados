@@ -33,6 +33,22 @@ export type GotenbergHealthStatus = {
  * sem lançar exceções — o caller decide o fallback.
  */
 export async function convertDocxToPdfWithGotenberg(docxBuffer: Buffer): Promise<Buffer | null> {
+  return convertOfficeToPdfWithGotenberg({
+    buffer: docxBuffer,
+    fileName: "certificate.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+}
+
+export async function convertOfficeToPdfWithGotenberg({
+  buffer,
+  fileName,
+  mimeType,
+}: {
+  buffer: Buffer;
+  fileName: string;
+  mimeType: string;
+}): Promise<Buffer | null> {
   const baseUrl = resolveGotenbergUrl();
   if (!baseUrl) return null;
 
@@ -45,17 +61,17 @@ export async function convertDocxToPdfWithGotenberg(docxBuffer: Buffer): Promise
   const timeout = setTimeout(() => controller.abort(), CONVERSION_TIMEOUT_MS);
 
   try {
-    const docxArrayBuffer = docxBuffer.buffer.slice(
-      docxBuffer.byteOffset,
-      docxBuffer.byteOffset + docxBuffer.byteLength,
+    const fileArrayBuffer = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
     ) as ArrayBuffer;
     const formData = new FormData();
     formData.append(
       "files",
-      new Blob([docxArrayBuffer], {
-        type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      new Blob([fileArrayBuffer], {
+        type: mimeType,
       }),
-      "certificate.docx",
+      fileName,
     );
 
     const response = await fetch(`${baseUrl}/forms/libreoffice/convert`, {
@@ -66,7 +82,7 @@ export async function convertDocxToPdfWithGotenberg(docxBuffer: Buffer): Promise
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      console.warn(`[Gotenberg] falha ao converter DOCX: HTTP ${response.status}`, errorText);
+      console.warn(`[Gotenberg] falha ao converter ${fileName}: HTTP ${response.status}`, errorText);
       return null;
     }
 

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { FileUp } from "lucide-react";
-import { uploadedBaseLayout } from "@/lib/certificate-layout";
+import { labelFromKey, uploadedBaseLayout } from "@/lib/certificate-layout";
 import { extractDocumentPreview } from "@/lib/document-extract.client";
 import { templateImportDraftStorageKey, type TemplateImportDraft } from "@/lib/template-import-draft";
 
@@ -31,6 +31,7 @@ export function UploadTemplateButton() {
       }
       const pagePreset = extracted.page ?? { width: 1123, height: 794, orientation: "landscape" };
       const isDocxFile = fileType.includes("wordprocessingml");
+      const isPptxFile = fileType.includes("presentationml");
       const layout = uploadedBaseLayout({
         fileName: file.name,
         fileType,
@@ -45,7 +46,7 @@ export function UploadTemplateButton() {
         elements: [],
         pageBorder: extracted.page?.border,
         assets: extracted.assets,
-        baseDocumentMode: isDocxFile ? "native" : undefined,
+        baseDocumentMode: isDocxFile || isPptxFile ? "native" : undefined,
       });
       const draft: TemplateImportDraft = {
         name: file.name.replace(/\.[^.]+$/, ""),
@@ -54,7 +55,16 @@ export function UploadTemplateButton() {
         height: pagePreset.height,
         orientation: pagePreset.orientation,
         background: fileType.startsWith("image/") ? dataUrl : null,
-        layout,
+        layout: extracted.variables?.length
+          ? {
+              ...layout,
+              variableDefinitions: extracted.variables.map((key) => ({
+                key,
+                label: labelFromKey(key),
+                required: true,
+              })),
+            }
+          : layout,
       };
 
       window.sessionStorage.setItem(templateImportDraftStorageKey, JSON.stringify(draft));
@@ -72,7 +82,7 @@ export function UploadTemplateButton() {
       {uploading ? "Importando" : "Importar modelo"}
       <input
         type="file"
-        accept=".pdf,.docx,.png,.jpg,.jpeg,image/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        accept=".pdf,.docx,.pptx,.png,.jpg,.jpeg,image/*,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
         className="hidden"
         disabled={uploading}
         onChange={async (event) => {
@@ -90,6 +100,9 @@ function guessFileType(fileName: string) {
   if (lower.endsWith(".pdf")) return "application/pdf";
   if (lower.endsWith(".docx")) {
     return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (lower.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   }
   return "application/octet-stream";
 }

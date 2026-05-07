@@ -29,22 +29,39 @@ export function validateDocxFile(file: File) {
   return "Envie um arquivo DOCX valido.";
 }
 
+export function validateOfficePreviewFile(file: File) {
+  const sizeError = validateFileSize(file, MAX_TEMPLATE_UPLOAD_BYTES);
+  if (sizeError) return sizeError;
+
+  if (
+    file.name.toLowerCase().endsWith(".docx") ||
+    file.name.toLowerCase().endsWith(".pptx") ||
+    file.type.includes("wordprocessingml") ||
+    file.type.includes("presentationml")
+  ) {
+    return null;
+  }
+
+  return "Envie um arquivo DOCX ou PPTX valido.";
+}
+
 export function validateTemplateImportFile(file: File) {
   const sizeError = validateFileSize(file, MAX_TEMPLATE_UPLOAD_BYTES);
   if (sizeError) return sizeError;
 
   const name = file.name.toLowerCase();
-  const allowedByName = [".docx", ".pdf", ".png", ".jpg", ".jpeg"].some((extension) =>
+  const allowedByName = [".docx", ".pptx", ".pdf", ".png", ".jpg", ".jpeg"].some((extension) =>
     name.endsWith(extension),
   );
   const allowedByType =
     file.type.includes("wordprocessingml") ||
+    file.type.includes("presentationml") ||
     file.type === "application/pdf" ||
     file.type.startsWith("image/");
 
   return allowedByName || allowedByType
     ? null
-    : "Envie um modelo DOCX, PDF ou imagem valido.";
+    : "Envie um modelo DOCX, PPTX, PDF ou imagem valido.";
 }
 
 export function validateTemplatePayloadSize(payload: unknown) {

@@ -350,10 +350,8 @@ function isDocxBaseLayout(layout: TemplateLayout) {
 
   return Boolean(
     fileType.includes("wordprocessingml") ||
-      fileType.includes("officedocument") ||
       fileName.endsWith(".docx") ||
-      dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml") ||
-      (layout.baseDocumentMode && (layout.basePages?.length ?? 0) > 0),
+      dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml"),
   );
 }
 

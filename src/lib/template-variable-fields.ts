@@ -1,5 +1,6 @@
 import {
   DATE_FIELD_KEYS,
+  formatMonthYearPtBr,
   isDateField,
   isLongDateField,
   normalizeFieldKey,
@@ -201,6 +202,16 @@ const PER_PERSON_KINDS = new Set<TemplateFieldKind>([
   "generic_document",
 ]);
 
+const MIRRORED_FIELD_KINDS = new Set<TemplateFieldKind>([
+  "recipient_name",
+  "company",
+  "city",
+  "hours",
+  "period",
+  "course",
+  "instructor",
+]);
+
 export function getTemplateVariableLabel(variable: TemplateVariableIdentity) {
   return getTemplateFieldMetadata(variable).label;
 }
@@ -326,6 +337,50 @@ export function isTemplateBatchSharedField(variable: TemplateVariableIdentity) {
   return kind !== "system_code" && !PER_PERSON_KINDS.has(kind);
 }
 
+export function dedupeTemplateFieldVariables<T extends TemplateVariableIdentity>(variables: T[]) {
+  const seenMirroredKinds = new Set<TemplateFieldKind>();
+  const result: T[] = [];
+
+  for (const variable of variables) {
+    const kind = getTemplateFieldKind(variable);
+    if (MIRRORED_FIELD_KINDS.has(kind)) {
+      if (seenMirroredKinds.has(kind)) continue;
+      seenMirroredKinds.add(kind);
+    }
+
+    result.push(variable);
+  }
+
+  return result;
+}
+
+export function mirrorTemplateFieldValues(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const mirrored = { ...values };
+  const groups = new Map<TemplateFieldKind, TemplateVariableIdentity[]>();
+
+  for (const variable of variables) {
+    const kind = getTemplateFieldKind(variable);
+    if (!MIRRORED_FIELD_KINDS.has(kind)) continue;
+    groups.set(kind, [...(groups.get(kind) ?? []), variable]);
+  }
+
+  for (const group of groups.values()) {
+    const value = group
+      .map((variable) => mirrored[variable.key]?.trim())
+      .find(Boolean);
+    if (!value) continue;
+
+    for (const variable of group) {
+      if (!mirrored[variable.key]?.trim()) mirrored[variable.key] = value;
+    }
+  }
+
+  return mirrored;
+}
+
 export function getTemplateFieldAliases(variable: TemplateVariableIdentity) {
   const kind = getTemplateFieldKind(variable);
   const aliases = new Set<string>();
@@ -343,6 +398,8 @@ export function getTemplateFieldAliases(variable: TemplateVariableIdentity) {
 }
 
 export function formatTemplateFieldValue(variable: TemplateVariableIdentity, value: string) {
+  if (getTemplateFieldKind(variable) === "period") return formatMonthYearPtBr(value);
+
   const mode = getTemplateDocumentMode(variable);
   if (mode === "CPF") return formatCpf(onlyDigits(value));
   if (mode === "CNPJ") return formatCnpj(onlyDigits(value));

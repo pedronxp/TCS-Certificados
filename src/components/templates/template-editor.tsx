@@ -784,6 +784,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const fileType = file.type || guessFileType(file.name);
     const extracted = await extractDocumentPreview(file);
     const isDocxFile = fileType.includes("wordprocessingml");
+    const isPptxFile = fileType.includes("presentationml");
     const nextBase = uploadedBaseLayout({
       fileName: file.name,
       fileType,
@@ -797,8 +798,18 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       pages: extracted.pages,
       elements: [],
       pageBorder: extracted.page?.border,
-      baseDocumentMode: isDocxFile ? "native" : undefined,
+      baseDocumentMode: isDocxFile || isPptxFile ? "native" : undefined,
     });
+    const nextLayout: TemplateLayout = extracted.variables?.length
+      ? {
+          ...nextBase,
+          variableDefinitions: extracted.variables.map((key) => ({
+            key,
+            label: labelFromKey(key),
+            required: true,
+          })),
+        }
+      : nextBase;
 
     if (fileType.startsWith("image/")) {
       setBackground(dataUrl);
@@ -807,7 +818,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     }
 
     setLayout((current) => {
-      const merged = mode === "replace" ? nextBase : mergeImportedBase(current, nextBase);
+      const merged = mode === "replace" ? nextLayout : mergeImportedBase(current, nextLayout);
       return {
         ...merged,
         baseFileName: file.name,
@@ -821,8 +832,8 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
         baseImageEngine: extracted.imageEngine,
       };
     });
-    setSelectedId(nextBase.elements[0]?.id ?? "");
-    setActivePageIndex(nextBase.elements[0]?.pageIndex ?? 0);
+    setSelectedId(nextLayout.elements[0]?.id ?? "");
+    setActivePageIndex(nextLayout.elements[0]?.pageIndex ?? 0);
     if (extracted.page) {
       setOrientation(extracted.page.orientation);
       setWidth(extracted.page.width);
@@ -909,7 +920,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
           Importar
           <input
             type="file"
-            accept="image/*,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  accept="image/*,.pdf,.docx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
             className="hidden"
             onChange={async (event) => {
               const file = event.target.files?.[0];
@@ -962,7 +973,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
               {hasImportedBase ? "Substituir base" : "Importar base"}
               <input
                 type="file"
-                accept="image/*,.pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept="image/*,.pdf,.docx,.pptx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.presentationml.presentation"
                 className="hidden"
                 onChange={async (event) => {
                   const file = event.target.files?.[0];
@@ -1681,10 +1692,8 @@ function isDocxLayout(layout: TemplateLayout) {
 
   return (
     fileType.includes("wordprocessingml") ||
-    fileType.includes("officedocument") ||
     fileName.endsWith(".docx") ||
-    dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml") ||
-    Boolean(layout.basePages?.length && layout.baseDocumentMode)
+    dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml")
   );
 }
 
@@ -1777,6 +1786,9 @@ function guessFileType(fileName: string) {
   if (fileName.toLowerCase().endsWith(".docx")) {
     return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
   }
+  if (fileName.toLowerCase().endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
   return "application/octet-stream";
 }
 
@@ -1826,6 +1838,7 @@ function mergeImportedBase(current: TemplateLayout, nextBase: TemplateLayout): T
     baseImageDataUrl: nextBase.baseImageDataUrl,
     baseImageEngine: nextBase.baseImageEngine,
     basePageBorder: nextBase.basePageBorder,
+    variableDefinitions: nextBase.variableDefinitions ?? current.variableDefinitions,
     elements: mergeImportedElements(current.elements, nextBase.elements),
   };
 }

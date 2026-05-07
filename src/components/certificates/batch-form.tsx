@@ -3,9 +3,10 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, Upload } from "lucide-react";
 import { notifyBatchJobStarted } from "@/components/certificates/batch-progress-toast";
-import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
+import { formatDateLongPtBr, formatMonthYearPtBr, isDateField } from "@/lib/date-fields";
 import {
   formatTemplateFieldValue,
+  dedupeTemplateFieldVariables,
   getTemplateDuplicateKey,
   getTemplateFieldMetadata,
   getTemplateVariableDescription,
@@ -59,6 +60,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   const [company, setCompany] = useState("");
   const [issuedDate, setIssuedDate] = useState("");
   const [sharedValues, setSharedValues] = useState<Record<string, string>>({});
+  const [sharedMonthValues, setSharedMonthValues] = useState<Record<string, string>>({});
   const [namesText, setNamesText] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
@@ -69,17 +71,19 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   );
   const variables = useMemo(() => selectedTemplate?.variables ?? [], [selectedTemplate]);
   const personVariables = useMemo(
-    () => variables.filter(isTemplateBatchPersonField),
+    () => dedupeTemplateFieldVariables(variables.filter(isTemplateBatchPersonField)),
     [variables],
   );
   const recipientVariable = personVariables.find(isTemplateRecipientField) ?? null;
   const sharedVariables = useMemo(
     () =>
-      variables.filter(
-        (variable) =>
-          isTemplateBatchSharedField(variable) &&
-          !isCompanyVariable(variable) &&
-          !isDateField(variable),
+      dedupeTemplateFieldVariables(
+        variables.filter(
+          (variable) =>
+            isTemplateBatchSharedField(variable) &&
+            !isCompanyVariable(variable) &&
+            !isDateField(variable),
+        ),
       ),
     [variables],
   );
@@ -121,6 +125,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     setMessage("");
     setNamesText("");
     setSharedValues({});
+    setSharedMonthValues({});
   }
 
   async function submit() {
@@ -238,17 +243,37 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                 <label key={variable.id} className="field">
                   <span className="field-label">{getFieldLabel(variable)}</span>
                   <small style={hintStyle}>{getTemplateVariableDescription(variable)}</small>
-                  <input
-                    value={sharedValues[variable.key] ?? ""}
-                    required={variable.required}
-                    placeholder={getTemplateVariablePlaceholder(variable)}
-                    onChange={(event) =>
-                      setSharedValues((current) => ({
-                        ...current,
-                        [variable.key]: event.target.value,
-                      }))
-                    }
-                  />
+                  {isPeriodField(variable) ? (
+                    <input
+                      type="month"
+                      value={sharedMonthValues[variable.key] ?? ""}
+                      required={variable.required}
+                      placeholder={getTemplateVariablePlaceholder(variable)}
+                      onChange={(event) => {
+                        const iso = event.target.value;
+                        setSharedMonthValues((current) => ({
+                          ...current,
+                          [variable.key]: iso,
+                        }));
+                        setSharedValues((current) => ({
+                          ...current,
+                          [variable.key]: formatMonthYearPtBr(iso),
+                        }));
+                      }}
+                    />
+                  ) : (
+                    <input
+                      value={sharedValues[variable.key] ?? ""}
+                      required={variable.required}
+                      placeholder={getTemplateVariablePlaceholder(variable)}
+                      onChange={(event) =>
+                        setSharedValues((current) => ({
+                          ...current,
+                          [variable.key]: event.target.value,
+                        }))
+                      }
+                    />
+                  )}
                 </label>
               ))}
             </div>
@@ -526,6 +551,10 @@ function getFieldLabel(variable: { key: string; label: string }) {
 
 function isCompanyVariable(variable: { key: string; label: string }) {
   return getTemplateFieldMetadata(variable).kind === "company";
+}
+
+function isPeriodField(variable: { key: string; label: string }) {
+  return getTemplateFieldMetadata(variable).kind === "period";
 }
 
 function getBatchBlockReason(

@@ -12,6 +12,7 @@ import {
   getTemplateVariableLabel,
   isTemplateBatchPersonField,
   isTemplateRecipientField,
+  mirrorTemplateFieldValues,
   validateTemplateFieldValue,
 } from "@/lib/template-variable-fields";
 import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
@@ -334,7 +335,7 @@ function normalizeRowsForTemplate(
       }
     }
 
-    return normalizedRow;
+    return mirrorTemplateFieldValues(variables, normalizedRow);
   });
 }
 
