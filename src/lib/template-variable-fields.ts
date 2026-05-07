@@ -99,7 +99,7 @@ const FIELD_PLACEHOLDERS: Record<TemplateFieldKind, string> = {
   cpf: "000.000.000-00",
   cnpj: "00.000.000/0000-00",
   cpf_cnpj: "000.000.000-00 ou 00.000.000/0000-00",
-  rg: "MG 12.345.678 ou 12.345.678",
+  rg: "MG 12.345.678 ou 12.345.678-9",
   uf: "MG",
   generic_document: "CPF, RG ou outro documento",
   company: "Nome da empresa",
@@ -533,13 +533,51 @@ function normalizeUf(value: string) {
 }
 
 function normalizeRg(value: string) {
-  return String(value ?? "")
+  const compact = String(value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toUpperCase()
-    .replace(/[^A-Z0-9./ -]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/[^A-Z0-9]/g, "");
+  if (!compact) return "";
+
+  const ufPrefix = compact.slice(0, 2);
+  const hasUfPrefix = BRAZIL_UFS.has(ufPrefix) && /\d/.test(compact.slice(2));
+  const prefix = hasUfPrefix ? ufPrefix : "";
+  const body = hasUfPrefix ? compact.slice(2) : compact;
+  const formattedBody = formatRgBody(body);
+
+  return [prefix, formattedBody].filter(Boolean).join(" ");
+}
+
+function formatRgBody(value: string) {
+  const checkDigitMatch = value.match(/^(\d{1,8})([A-Z])$/);
+  if (checkDigitMatch) {
+    return `${formatRgDigits(checkDigitMatch[1])}-${checkDigitMatch[2]}`;
+  }
+
+  if (/^\d+$/.test(value)) return formatRgDigits(value);
+  return value;
+}
+
+function formatRgDigits(value: string) {
+  const digits = value.slice(0, 12);
+  if (digits.length <= 3) return digits;
+  if (digits.length === 9) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}-${digits.slice(8)}`;
+  }
+
+  const groups: string[] = [];
+  let remaining = digits;
+  const firstGroupSize = remaining.length % 3 || 3;
+  groups.push(remaining.slice(0, firstGroupSize));
+  remaining = remaining.slice(firstGroupSize);
+
+  while (remaining.length) {
+    groups.push(remaining.slice(0, 3));
+    remaining = remaining.slice(3);
+  }
+
+  return groups.join(".");
 }
 
 function formatCpf(value: string) {

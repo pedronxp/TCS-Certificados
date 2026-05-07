@@ -21,7 +21,7 @@ test("describes imported certificate variables with semantic labels", () => {
 test("uses helpful placeholders for certificate creation fields", () => {
   assert.equal(
     getTemplateVariablePlaceholder({ key: "id", label: "Id" }),
-    "MG 12.345.678 ou 12.345.678",
+    "MG 12.345.678 ou 12.345.678-9",
   );
   assert.equal(
     getTemplateVariablePlaceholder({ key: "uf", label: "Uf" }),
@@ -48,6 +48,9 @@ test("formats and validates CPF, RG and UF fields", () => {
 
   assert.equal(getTemplateDocumentMode({ key: "id", label: "Id" }), "RG");
   assert.equal(formatTemplateFieldValue({ key: "id", label: "Id" }, "mg 12.345.678"), "MG 12.345.678");
+  assert.equal(formatTemplateFieldValue({ key: "id", label: "Id" }, "MG265265265"), "MG 26.526.526-5");
+  assert.equal(formatTemplateFieldValue({ key: "rg", label: "RG" }, "123456789"), "12.345.678-9");
+  assert.equal(formatTemplateFieldValue({ key: "rg", label: "RG" }, "12345678X"), "12.345.678-X");
   assert.equal(validateTemplateFieldValue({ key: "uf", label: "Uf" }, "MG"), null);
   assert.match(validateTemplateFieldValue({ key: "uf", label: "Uf" }, "XX") ?? "", /UF/);
 });
