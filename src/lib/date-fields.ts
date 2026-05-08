@@ -76,6 +76,14 @@ export function formatMonthYearPtBr(value: string) {
   return `${MONTHS_PT[date.month - 1]} de ${date.year}`;
 }
 
+export function formatMonthNamePtBr(value: string) {
+  const trimmed = String(value ?? "").trim();
+  const month = parseMonthParts(trimmed);
+  if (!month) return trimmed;
+
+  return MONTHS_PT[month - 1];
+}
+
 function isDateFieldKey(value: string) {
   return DATE_FIELD_KEY_SET.has(value) || isLongDateKey(value);
 }
@@ -126,6 +134,26 @@ function parseMonthYearParts(value: string) {
   }
 
   return null;
+}
+
+function parseMonthParts(value: string) {
+  const monthYear = parseMonthYearParts(value);
+  if (monthYear) return monthYear.month;
+
+  const monthNumberMatch = value.match(/^0?([1-9]|1[0-2])$/);
+  if (monthNumberMatch) return Number(monthNumberMatch[1]);
+
+  const normalized = normalizeFieldKey(value);
+  const monthIndex = MONTHS_PT.findIndex((month) => {
+    const normalizedMonth = normalizeFieldKey(month);
+    return (
+      normalized === normalizedMonth ||
+      normalized.startsWith(`${normalizedMonth}_`) ||
+      normalized.endsWith(`_${normalizedMonth}`)
+    );
+  });
+
+  return monthIndex >= 0 ? monthIndex + 1 : null;
 }
 
 function validDateParts(year: number, month: number, day: number) {
