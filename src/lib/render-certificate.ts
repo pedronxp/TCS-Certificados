@@ -5,6 +5,12 @@ import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf
 import PizZip from "pizzip";
 import QRCode from "qrcode";
 import { fillTemplateText, normalizeVariableKey, normalizeVisualDocxLayout, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import {
+  certificateFileExtension,
+  certificateFileMimeType,
+  getTemplateNativeFileType,
+  type NativeCertificateFileType,
+} from "@/lib/certificate-output-format";
 import { convertDocxToPdfWithCloudConvert, convertOfficeToPdfWithCloudConvert as convertOfficeToPdfWithCloudConvertCloud } from "@/lib/cloudconvert";
 import { convertDocxToPdfWithGotenberg, convertOfficeToPdfWithGotenberg } from "@/lib/gotenberg";
 import { convertDocxToPdfBuffer, convertOfficeToPdfBuffer } from "@/lib/libreoffice";
@@ -25,6 +31,39 @@ export type RenderInput = {
   verificationCode: string;
   appUrl: string;
 };
+
+export type RenderedNativeCertificate = {
+  type: NativeCertificateFileType;
+  extension: string;
+  mimeType: string;
+  buffer: Buffer;
+};
+
+export function getNativeCertificateFileType(template: RenderInput["template"]): NativeCertificateFileType {
+  return getTemplateNativeFileType(template.layout);
+}
+
+export async function renderNativeCertificateBuffer(input: RenderInput): Promise<RenderedNativeCertificate> {
+  const layout = parseRenderLayout(input.template.layout);
+
+  if (isNativePptxBaseLayout(layout)) {
+    const type = "PPTX" as const;
+    return {
+      type,
+      extension: certificateFileExtension(type),
+      mimeType: certificateFileMimeType(type),
+      buffer: await renderPptxFromBaseTemplate(input, layout),
+    };
+  }
+
+  const type = "DOCX" as const;
+  return {
+    type,
+    extension: certificateFileExtension(type),
+    mimeType: certificateFileMimeType(type),
+    buffer: await renderDocxBuffer(input),
+  };
+}
 
 export async function renderCertificateHtml(input: RenderInput) {
   const layout = parseRenderLayout(input.template.layout);
@@ -49,14 +88,32 @@ export async function renderPdfBuffer(input: RenderInput) {
     return renderPdfFromBaseTemplate(input, layout);
   }
   if (isNativeDocxBaseLayout(layout)) {
-    const nativePdf = await renderPdfFromNativeDocxBaseTemplate(input, layout);
-    if (nativePdf) return nativePdf;
+    try {
+      const nativePdf = await renderPdfFromNativeDocxBaseTemplate(input, layout);
+      if (nativePdf) return nativePdf;
+    } catch (error) {
+      if (!hasRenderableVisualPdfFallback(layout)) throw error;
+      console.warn("Conversao DOCX para PDF falhou; usando fallback visual do modelo.");
+    }
+
+    if (hasRenderableVisualPdfFallback(layout)) {
+      return renderPdfFromVisualBaseTemplate(input, layout);
+    }
 
     throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
   }
   if (isNativePptxBaseLayout(layout)) {
-    const nativePdf = await renderPdfFromNativePptxBaseTemplate(input, layout);
-    if (nativePdf) return nativePdf;
+    try {
+      const nativePdf = await renderPdfFromNativePptxBaseTemplate(input, layout);
+      if (nativePdf) return nativePdf;
+    } catch (error) {
+      if (!hasRenderableVisualPdfFallback(layout)) throw error;
+      console.warn("Conversao PPTX para PDF falhou; usando fallback visual do modelo.");
+    }
+
+    if (hasRenderableVisualPdfFallback(layout)) {
+      return renderPdfFromVisualBaseTemplate(input, layout);
+    }
 
     throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
   }
@@ -145,6 +202,15 @@ export async function renderDocxBuffer(input: RenderInput) {
   return Buffer.from(await Packer.toBuffer(document));
 }
 
+export async function renderPptxBuffer(input: RenderInput) {
+  const layout = parseRenderLayout(input.template.layout);
+  if (!isNativePptxBaseLayout(layout)) {
+    throw new Error("O modelo deste certificado nao possui base PPTX nativa.");
+  }
+
+  return renderPptxFromBaseTemplate(input, layout);
+}
+
 async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const pdfDocument = await PDFDocument.load(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
   const fonts = await embedPdfFonts(pdfDocument);
@@ -209,27 +275,9 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
 
 async function renderPdfFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const pptxBuffer = await renderPptxFromBaseTemplate(input, layout);
-  const mimeType = layout.baseFileType || "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-
-  const gotenbergPdf = await convertOfficeToPdfWithGotenberg({
-    buffer: pptxBuffer,
-    fileName: "certificate.pptx",
-    mimeType,
+  return convertNativePptxToPdfBuffer(pptxBuffer, layout, {
+    preferCloudConvertOffice: true,
   });
-  if (gotenbergPdf) return Buffer.from(gotenbergPdf);
-
-  const libreOfficePdf = await convertOfficeToPdfBuffer(pptxBuffer, "pptx");
-  if (libreOfficePdf) return Buffer.from(libreOfficePdf);
-
-  const cloudConvertPdf = await convertOfficeToPdfWithCloudConvertCloud({
-    buffer: pptxBuffer,
-    inputFormat: inferOfficeInputFormat(layout, "pptx"),
-    fileName: layout.baseFileName || "certificate.pptx",
-    mimeType,
-  });
-  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
-
-  return null;
 }
 
 async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
@@ -288,6 +336,81 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
       element,
       fonts,
     });
+  }
+
+  return Buffer.from(await pdfDocument.save());
+}
+
+async function renderPdfFromVisualBaseTemplate(input: RenderInput, layout: TemplateLayout) {
+  const pdfDocument = await PDFDocument.create();
+  const fonts = await embedPdfFonts(pdfDocument);
+  const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
+  const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
+  const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
+  const values = buildRenderValues(input);
+  const pages = buildRenderPages(layout, input.template.width, input.template.height, input.template.background);
+
+  for (const pageInfo of pages) {
+    const page = pdfDocument.addPage([pageInfo.width, pageInfo.height]);
+
+    if (pageInfo.background) {
+      const backgroundImage = await embedPdfDataUrlImage(pdfDocument, pageInfo.background);
+      page.drawImage(backgroundImage, {
+        x: 0,
+        y: 0,
+        width: pageInfo.width,
+        height: pageInfo.height,
+      });
+    }
+
+    if (pageInfo.border) {
+      page.drawRectangle({
+        x: pageInfo.border.inset,
+        y: pageInfo.border.inset,
+        width: pageInfo.width - pageInfo.border.inset * 2,
+        height: pageInfo.height - pageInfo.border.inset * 2,
+        borderColor: hexToRgb(pageInfo.border.color),
+        borderWidth: pageInfo.border.width,
+      });
+    }
+
+    for (const element of sortElementsForRender(layout.elements)) {
+      if ((element.pageIndex ?? 0) !== pageInfo.index) continue;
+
+      if (element.type === "qr") {
+        page.drawImage(qrImage, {
+          x: element.x,
+          y: pageInfo.height - element.y - element.height,
+          width: Math.min(element.width, element.height),
+          height: Math.min(element.width, element.height),
+        });
+        continue;
+      }
+
+      if (element.type === "image") {
+        if (!element.content) continue;
+        const image = await embedPdfDataUrlImage(pdfDocument, element.content);
+        page.drawImage(image, {
+          x: element.x,
+          y: pageInfo.height - element.y - element.height,
+          width: element.width,
+          height: element.height,
+          opacity: resolveImageOpacity(element),
+        });
+        continue;
+      }
+
+      drawPdfTextElement(page, {
+        text: resolveElementText(element, values),
+        x: element.x,
+        topY: pageInfo.height - element.y,
+        width: element.width,
+        height: element.height,
+        fontSize: element.fontSize,
+        element,
+        fonts,
+      });
+    }
   }
 
   return Buffer.from(await pdfDocument.save());
@@ -366,6 +489,45 @@ async function renderDocxFromNativePptxBaseTemplate(input: RenderInput, layout: 
   return Buffer.from(await Packer.toBuffer(document));
 }
 
+async function convertNativePptxToPdfBuffer(
+  pptxBuffer: Buffer,
+  layout: TemplateLayout,
+  options: { preferCloudConvertOffice?: boolean } = {},
+) {
+  const mimeType = layout.baseFileType || "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
+  if (options.preferCloudConvertOffice) {
+    const cloudConvertOfficePdf = await convertOfficeToPdfWithCloudConvertCloud({
+      buffer: pptxBuffer,
+      inputFormat: inferOfficeInputFormat(layout, "pptx"),
+      fileName: layout.baseFileName || "certificate.pptx",
+      mimeType,
+      engine: "office",
+    });
+    if (cloudConvertOfficePdf) return Buffer.from(cloudConvertOfficePdf);
+  }
+
+  const gotenbergPdf = await convertOfficeToPdfWithGotenberg({
+    buffer: pptxBuffer,
+    fileName: "certificate.pptx",
+    mimeType,
+  });
+  if (gotenbergPdf) return Buffer.from(gotenbergPdf);
+
+  const libreOfficePdf = await convertOfficeToPdfBuffer(pptxBuffer, "pptx");
+  if (libreOfficePdf) return Buffer.from(libreOfficePdf);
+
+  const cloudConvertPdf = await convertOfficeToPdfWithCloudConvertCloud({
+    buffer: pptxBuffer,
+    inputFormat: inferOfficeInputFormat(layout, "pptx"),
+    fileName: layout.baseFileName || "certificate.pptx",
+    mimeType,
+  });
+  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
+
+  return null;
+}
+
 async function renderPptxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const zip = await JSZip.loadAsync(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
   const xmlFiles = await readPptxXmlFiles(zip);
@@ -425,6 +587,17 @@ function buildRenderValues(input: RenderInput): Record<string, string> {
 function dataUrlToBuffer(dataUrl: string) {
   const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
   return Buffer.from(base64, "base64");
+}
+
+async function embedPdfDataUrlImage(pdfDocument: PDFDocument, dataUrl: string) {
+  const buffer = dataUrlToBuffer(dataUrl);
+  const mimeType = dataUrl.slice(0, dataUrl.indexOf(";")).toLowerCase();
+
+  if (mimeType.includes("jpeg") || mimeType.includes("jpg")) {
+    return pdfDocument.embedJpg(buffer);
+  }
+
+  return pdfDocument.embedPng(buffer);
 }
 
 type EmbeddedPdfFonts = {
@@ -648,18 +821,21 @@ function certificateHtml({
 
 function buildRenderPages(layout: TemplateLayout, width: number, height: number, background: string | null) {
   const isEditableBase = layout.baseDocumentMode === "editable";
+  const renderImageDataUrl = layout.baseRenderFileType?.startsWith("image/")
+    ? layout.baseRenderDataUrl
+    : undefined;
   const hasPageImages = layout.basePages?.some((page) => Boolean(page.imageDataUrl));
   const hasMultiPageElements = layout.elements.some((element) => (element.pageIndex ?? 0) > 0);
   const sourcePages = layout.basePages?.length && (isEditableBase || hasPageImages || hasMultiPageElements)
     ? layout.basePages
-    : [{ index: 0, width, height, imageDataUrl: layout.baseImageDataUrl ?? background ?? undefined, border: layout.basePageBorder }];
+    : [{ index: 0, width, height, imageDataUrl: layout.baseImageDataUrl ?? renderImageDataUrl ?? background ?? undefined, border: layout.basePageBorder }];
   const pages = sourcePages.map((page, index) => ({
     index: page.index ?? index,
     width: page.width || width,
     height: page.height || height,
     background: isEditableBase
       ? index === 0 ? background ?? undefined : undefined
-      : page.imageDataUrl ?? (index === 0 ? background ?? layout.baseImageDataUrl ?? undefined : undefined),
+      : page.imageDataUrl ?? (index === 0 ? background ?? layout.baseImageDataUrl ?? renderImageDataUrl ?? undefined : undefined),
     border: page.border ?? (index === 0 ? layout.basePageBorder : undefined),
   }));
   const maxPageIndex = Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0));
@@ -669,6 +845,14 @@ function buildRenderPages(layout: TemplateLayout, width: number, height: number,
   }
 
   return pages.sort((a, b) => a.index - b.index);
+}
+
+function hasRenderableVisualPdfFallback(layout: TemplateLayout) {
+  return Boolean(
+    layout.baseImageDataUrl ||
+      layout.basePages?.some((page) => Boolean(page.imageDataUrl)) ||
+      (layout.baseRenderDataUrl && layout.baseRenderFileType?.startsWith("image/")),
+  );
 }
 
 function justify(align: "left" | "center" | "right") {

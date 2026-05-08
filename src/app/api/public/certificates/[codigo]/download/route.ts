@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
+import {
+  certificateFileExtension,
+  certificateFileMimeType,
+  isOfficeBaseLayout,
+  normalizeCertificateFileType,
+  type CertificateFileType,
+} from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import {
   DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE,
   renderDocxBuffer,
   renderPdfBuffer,
+  renderPptxBuffer,
 } from "@/lib/render-certificate";
 import { verifyIssueDocument } from "@/lib/public-certificate-validation";
 import {
@@ -19,11 +27,10 @@ import { normalizeVerificationCode } from "@/lib/verification-code";
 const PUBLIC_DOWNLOAD_RATE_LIMIT_ACTION = "public.validation.download";
 const PUBLIC_DOWNLOAD_RATE_LIMIT_ATTEMPTS = 30;
 const PUBLIC_DOWNLOAD_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const STALE_OFFICE_PDF_MAX_BYTES = 12_000;
 
 const PDF_CONVERTER_UNAVAILABLE_USER_MESSAGE =
   "Nao foi possivel gerar o PDF deste certificado agora. Tente novamente mais tarde.";
-
-type FileType = "PDF" | "DOCX";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,7 +62,7 @@ export async function GET(
   const codigo = normalizeVerificationCode(rawCodigo);
   const url = new URL(request.url);
   const documentValue = String(url.searchParams.get("documento") ?? "").trim();
-  const fileType = normalizeFileType(url.searchParams.get("type"));
+  const fileType = normalizeCertificateFileType(url.searchParams.get("type"));
   const issue = await findIssueForPublicDownload(codigo, fileType);
 
   if (!issue) {
@@ -89,12 +96,17 @@ export async function GET(
   const existingFile = issue.files[0] ?? null;
   const storedContent = (existingFile?.content?.length ? Buffer.from(existingFile.content) : null)
     ?? await loadStoredFileContent(existingFile?.storagePath ?? null);
-  let regeneratedContent: Buffer | null = null;
+  const forceRegenerate = url.searchParams.get("regenerate") === "1";
+  const mustRegenerate =
+    forceRegenerate ||
+    !storedContent ||
+    shouldRegenerateStoredContent(fileType, issue.template.layout, storedContent);
+  let regeneratedFile: RegeneratedCertificateFile | null = null;
   let regenerationError: Error | null = null;
 
-  if (!storedContent) {
+  if (mustRegenerate) {
     try {
-      regeneratedContent = await regeneratePublicFileContent(issue, fileType);
+      regeneratedFile = await regeneratePublicFileContent(issue, fileType);
     } catch (error) {
       console.error("Falha ao regenerar arquivo publico do certificado.", error);
       regenerationError = error instanceof Error
@@ -103,7 +115,7 @@ export async function GET(
     }
   }
 
-  const content = storedContent ?? regeneratedContent;
+  const content = regeneratedFile?.content ?? (mustRegenerate ? null : storedContent);
 
   if (!content) {
     if (regenerationError) {
@@ -124,20 +136,21 @@ export async function GET(
     return NextResponse.json({ error: "Conteudo do arquivo nao encontrado." }, { status: 404 });
   }
 
-  const filename = existingFile?.filename ?? getPublicFilename(issue, fileType);
-  const mimeType = existingFile?.mimeType ?? getPublicMimeType(fileType);
+  const filename = regeneratedFile?.filename ?? existingFile?.filename ?? getPublicFilename(issue, fileType);
+  const mimeType = regeneratedFile?.mimeType ?? existingFile?.mimeType ?? certificateFileMimeType(fileType);
+  const disposition = fileType === "PDF" ? "inline" : "attachment";
   const body = content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength) as ArrayBuffer;
 
   return new NextResponse(body, {
     headers: {
       "Content-Type": mimeType,
-      "Content-Disposition": `inline; filename="${encodeURIComponent(filename)}"`,
+      "Content-Disposition": `${disposition}; filename="${encodeURIComponent(filename)}"`,
       "X-Content-Type-Options": "nosniff",
     },
   });
 }
 
-async function findIssueForPublicDownload(code: string, type: FileType) {
+async function findIssueForPublicDownload(code: string, type: CertificateFileType) {
   return prisma.certificateIssue.findUnique({
     where: { verificationCode: code },
     select: {
@@ -159,6 +172,12 @@ async function findIssueForPublicDownload(code: string, type: FileType) {
       files: {
         where: { type },
         take: 1,
+        select: {
+          filename: true,
+          mimeType: true,
+          content: true,
+          storagePath: true,
+        },
       },
     },
   });
@@ -166,37 +185,49 @@ async function findIssueForPublicDownload(code: string, type: FileType) {
 
 type PublicDownloadIssue = NonNullable<Awaited<ReturnType<typeof findIssueForPublicDownload>>>;
 
-async function regeneratePublicFileContent(issue: PublicDownloadIssue, type: FileType) {
+type RegeneratedCertificateFile = {
+  content: Buffer;
+  filename: string;
+  mimeType: string;
+};
+
+function shouldRegenerateStoredContent(type: CertificateFileType, layout: unknown, content: Buffer) {
+  if (type !== "PDF") return false;
+  if (!content.subarray(0, 4).equals(Buffer.from("%PDF"))) return true;
+
+  return content.length > 0 && content.length < STALE_OFFICE_PDF_MAX_BYTES && isOfficeBaseLayout(layout);
+}
+
+async function regeneratePublicFileContent(
+  issue: PublicDownloadIssue,
+  type: CertificateFileType,
+): Promise<RegeneratedCertificateFile> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const values = readStringValues(issue.values);
+  const renderInput = { template: issue.template, values, verificationCode: issue.verificationCode, appUrl };
   const content = type === "DOCX"
-    ? await renderDocxBuffer({ template: issue.template, values, verificationCode: issue.verificationCode, appUrl })
-    : await renderPdfBuffer({ template: issue.template, values, verificationCode: issue.verificationCode, appUrl });
+    ? await renderDocxBuffer(renderInput)
+    : type === "PPTX"
+      ? await renderPptxBuffer(renderInput)
+      : await renderPdfBuffer(renderInput);
   const filename = getPublicFilename(issue, type);
-  const mimeType = getPublicMimeType(type);
+  const mimeType = certificateFileMimeType(type);
 
   await prisma.generatedFile.upsert({
     where: { issueId_type: { issueId: issue.id, type } },
-    update: { filename, mimeType, content },
-    create: { issueId: issue.id, type, filename, mimeType, content },
+    update: { filename, mimeType, content: toPrismaBytes(content), storagePath: null },
+    create: { issueId: issue.id, type, filename, mimeType, content: toPrismaBytes(content) },
   });
 
-  return content;
+  return { content, filename, mimeType };
 }
 
-function normalizeFileType(type: string | null): FileType {
-  return type?.toUpperCase() === "DOCX" ? "DOCX" : "PDF";
-}
+function getPublicFilename(issue: PublicDownloadIssue, type: CertificateFileType) {
+  if (type === "PDF") {
+    return `${sanitizeFilenamePart(issue.recipient.name)}-${sanitizeFilenamePart(issue.verificationCode)}.pdf`;
+  }
 
-function getPublicMimeType(type: FileType) {
-  return type === "DOCX"
-    ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    : "application/pdf";
-}
-
-function getPublicFilename(issue: PublicDownloadIssue, type: FileType) {
-  const extension = type === "DOCX" ? "docx" : "pdf";
-  return `${sanitizeFilenamePart(issue.recipient.name)}-${sanitizeFilenamePart(issue.template.name)}.${extension}`;
+  return `${sanitizeFilenamePart(issue.recipient.name)}-${sanitizeFilenamePart(issue.template.name)}.${certificateFileExtension(type)}`;
 }
 
 function sanitizeFilenamePart(value: string) {
@@ -229,4 +260,8 @@ async function loadStoredFileContent(storagePath: string | null) {
     console.warn("Falha ao baixar arquivo publico do storage.", error);
     return null;
   }
+}
+
+function toPrismaBytes(buffer: Buffer) {
+  return Uint8Array.from(buffer);
 }

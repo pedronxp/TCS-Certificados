@@ -15,6 +15,7 @@ import { BrandLogo } from "@/components/brand-logo";
 import { SensitiveDocumentInput } from "@/components/sensitive-document-input";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
+import { getTemplateNativeFileType } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import {
   maskDocumentForDisplay,
@@ -80,6 +81,10 @@ export default async function ValidatePage({
   const publicPdfUrl = `/api/public/certificates/${encodeURIComponent(
     canonicalCode,
   )}/download?type=pdf&documento=${encodeURIComponent(documentValue)}`;
+  const nativeFileType = issue ? getTemplateNativeFileType(issue.template.layout) : "DOCX";
+  const publicNativeUrl = `/api/public/certificates/${encodeURIComponent(
+    canonicalCode,
+  )}/download?type=${nativeFileType.toLowerCase()}&documento=${encodeURIComponent(documentValue)}`;
 
   return (
     <main className="public-validation-page">
@@ -146,6 +151,12 @@ export default async function ValidatePage({
                   <a className="btn btn-primary" href={publicPdfUrl} target="_blank" rel="noreferrer">
                     <Download className="size-4" />
                     Abrir PDF
+                  </a>
+                ) : null}
+                {canShowDocument ? (
+                  <a className="btn btn-ghost" href={publicNativeUrl}>
+                    <Download className="size-4" />
+                    Baixar {nativeFileType}
                   </a>
                 ) : null}
                 <a className="btn btn-ghost" href={whatsappUrl} target="_blank" rel="noreferrer">

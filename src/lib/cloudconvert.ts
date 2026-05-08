@@ -37,6 +37,11 @@ type CloudConvertOfficeInput = {
   inputFormat: string;
   fileName?: string;
   mimeType?: string;
+  engine?: string;
+};
+
+type NormalizedCloudConvertOfficeInput = Required<Omit<CloudConvertOfficeInput, "engine">> & {
+  engine?: string;
 };
 
 export async function convertDocxToPdfWithCloudConvert(docxBuffer: Buffer): Promise<Buffer | null> {
@@ -57,7 +62,12 @@ export async function convertOfficeToPdfWithCloudConvert(input: CloudConvertOffi
   const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
   try {
-    const job = await createCloudConvertJob(config, normalizedInput.inputFormat, controller.signal);
+    const job = await createCloudConvertJob(
+      config,
+      normalizedInput.inputFormat,
+      normalizedInput.engine || config.engine,
+      controller.signal,
+    );
     const uploadTask = findTask(job, importTaskName(normalizedInput.inputFormat));
     await uploadOfficeFileToCloudConvert(uploadTask, normalizedInput, controller.signal);
 
@@ -105,6 +115,7 @@ function getCloudConvertConfig() {
 async function createCloudConvertJob(
   config: NonNullable<ReturnType<typeof getCloudConvertConfig>>,
   inputFormat: string,
+  engine: string,
   signal: AbortSignal,
 ) {
   const importTask = importTaskName(inputFormat);
@@ -121,7 +132,7 @@ async function createCloudConvertJob(
           input: importTask,
           input_format: inputFormat,
           output_format: "pdf",
-          engine: config.engine,
+          engine,
           filename: "certificate.pdf",
           timeout: Math.max(10, Math.ceil(config.timeoutMs / 1000)),
         },
@@ -139,7 +150,7 @@ async function createCloudConvertJob(
 
 async function uploadOfficeFileToCloudConvert(
   task: CloudConvertTask,
-  input: Required<CloudConvertOfficeInput>,
+  input: NormalizedCloudConvertOfficeInput,
   signal: AbortSignal,
 ) {
   const form = task.result?.form;
@@ -168,16 +179,18 @@ async function uploadOfficeFileToCloudConvert(
   }
 }
 
-function normalizeOfficeInput(input: CloudConvertOfficeInput): Required<CloudConvertOfficeInput> {
+function normalizeOfficeInput(input: CloudConvertOfficeInput): NormalizedCloudConvertOfficeInput {
   const inputFormat = input.inputFormat.replace(/[^a-z0-9]/gi, "").toLowerCase() || "docx";
   const fileName = input.fileName?.trim() || `certificate.${inputFormat}`;
   const mimeType = input.mimeType?.trim() || defaultOfficeMimeType(inputFormat);
+  const engine = input.engine?.trim();
 
   return {
     buffer: input.buffer,
     inputFormat,
     fileName,
     mimeType,
+    ...(engine ? { engine } : {}),
   };
 }
 

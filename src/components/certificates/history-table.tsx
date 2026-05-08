@@ -24,6 +24,8 @@ export type HistoryIssue = {
   company: string;
   templateName: string;
   issuedByName: string;
+  nativeDownloadType: "docx" | "pptx";
+  nativeDownloadLabel: "DOCX" | "PPTX";
 };
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", {
@@ -67,7 +69,7 @@ export function HistoryTable({
     if (!selectedIds.length || bulkDeleting) return;
     const confirmed = await confirm({
       title: "Remover documentos selecionados",
-      message: `Remover os arquivos PDF/DOCX de ${selectedIds.length} certificado(s)? Os codigos e a validacao continuam no sistema.`,
+      message: `Remover os arquivos de ${selectedIds.length} certificado(s)? Os codigos e a validacao continuam no sistema.`,
       confirmLabel: "Remover documentos",
       tone: "danger",
     });
@@ -260,6 +262,8 @@ export function HistoryTable({
                   hiddenAt={issue.hiddenAt}
                   documentAvailable={issue.documentAvailable}
                   documentExpired={issue.documentExpired}
+                  nativeDownloadType={issue.nativeDownloadType}
+                  nativeDownloadLabel={issue.nativeDownloadLabel}
                   canManage={canManage}
                 />
               </div>

@@ -274,7 +274,7 @@ export function IssueForm({
             className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
-            {loading ? "Gerando" : "Gerar PDF e DOCX"}
+            {loading ? "Gerando" : "Gerar PDF e arquivo"}
           </button>
         </div>
       </div>
@@ -314,7 +314,7 @@ export function IssueForm({
                 className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
-                {loading ? "Gerando" : "Gerar PDF e DOCX"}
+                {loading ? "Gerando" : "Gerar PDF e arquivo"}
               </button>
             </div>
           </div>

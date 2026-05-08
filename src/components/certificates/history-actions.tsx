@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CertificateStatus } from "@prisma/client";
-import { Ban, CalendarCheck2, Eye, EyeOff, FileDown, LoaderCircle, MessageCircle, ShieldCheck, Trash2, X } from "lucide-react";
+import { Ban, CalendarCheck2, Eye, EyeOff, FileDown, LoaderCircle, ShieldCheck, Trash2, X } from "lucide-react";
 import { useConfirmDialog } from "@/components/confirmation-dialog";
 
-type PendingAction = "download-pdf" | "download-docx" | "revoke" | "expire" | "schedule" | "clear" | "hide" | null;
-type DownloadType = "pdf" | "docx";
+type PendingAction = "download-pdf" | "download-native" | "revoke" | "expire" | "schedule" | "clear" | "hide" | null;
+type DownloadType = "pdf" | "docx" | "pptx";
+type NativeDownloadType = "docx" | "pptx";
 
 const scheduleDateFormatter = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short" });
 
@@ -19,6 +20,8 @@ export function HistoryActions({
   hiddenAt,
   documentAvailable,
   documentExpired,
+  nativeDownloadType,
+  nativeDownloadLabel,
   canManage,
 }: {
   id: string;
@@ -28,25 +31,24 @@ export function HistoryActions({
   hiddenAt: string | null;
   documentAvailable: boolean;
   documentExpired: boolean;
+  nativeDownloadType: NativeDownloadType;
+  nativeDownloadLabel: "DOCX" | "PPTX";
   canManage: boolean;
 }) {
   const router = useRouter();
   const { confirm, confirmationDialog } = useConfirmDialog();
   const [savedDate, setSavedDate] = useState(deleteAt ?? "");
   const [scheduledDate, setScheduledDate] = useState(deleteAt ?? "");
-  const [scheduleVisible, setScheduleVisible] = useState(Boolean(deleteAt));
+  const [scheduleVisible, setScheduleVisible] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const disabled = !canManage || Boolean(pendingAction);
   const expireDisabled = disabled || documentExpired;
   const downloadDisabled = Boolean(pendingAction) || !documentAvailable;
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "";
-  const validationUrl = `${appUrl}/validar/${verificationCode}`;
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(`Confira a validação do certificado: ${validationUrl}`)}`;
 
   async function downloadFile(type: DownloadType) {
     if (pendingAction || !documentAvailable || documentExpired) return;
 
-    setPendingAction(type === "pdf" ? "download-pdf" : "download-docx");
+    setPendingAction(type === "pdf" ? "download-pdf" : "download-native");
     try {
       const res = await fetch(`/api/certificates/${id}/download/${type}`);
       if (!res.ok) {
@@ -92,7 +94,7 @@ export function HistoryActions({
     const confirmed = await confirm({
       title: nextDate ? "Programar expiracao" : "Limpar expiracao programada",
       message: nextDate
-        ? `Os arquivos PDF/DOCX deste certificado serao removidos em ${formatScheduleDate(nextDate)}. O codigo e a validacao continuam salvos.`
+        ? `Os arquivos deste certificado serao removidos em ${formatScheduleDate(nextDate)}. O codigo e a validacao continuam salvos.`
         : "A data de expiracao automatica sera removida.",
       confirmLabel: nextDate ? "Programar" : "Limpar programacao",
       tone: nextDate ? "danger" : "default",
@@ -118,7 +120,7 @@ export function HistoryActions({
   async function expireNow() {
     const confirmed = await confirm({
       title: "Remover documentos",
-      message: "Os arquivos PDF/DOCX serao removidos agora. O certificado, o codigo e a validacao continuam no sistema.",
+      message: "Os arquivos deste certificado serao removidos agora. O certificado, o codigo e a validacao continuam no sistema.",
       confirmLabel: "Remover documentos",
       tone: "danger",
     });
@@ -212,12 +214,12 @@ export function HistoryActions({
             : <FileDown style={{ width: 13, height: 13 }} />} PDF
         </button>
 
-        {/* DOCX */}
+        {/* Native file */}
         <button
           type="button"
-          onClick={() => downloadFile("docx")}
+          onClick={() => downloadFile(nativeDownloadType)}
           disabled={downloadDisabled}
-          title={documentAvailable ? "Baixar DOCX" : "Documento expirado"}
+          title={documentAvailable ? `Baixar ${nativeDownloadLabel}` : "Documento expirado"}
           style={{
             display: "inline-flex",
             alignItems: "center",
@@ -231,13 +233,13 @@ export function HistoryActions({
             fontWeight: 700,
             color: "var(--text-secondary)",
             cursor: downloadDisabled ? "not-allowed" : "pointer",
-            opacity: downloadDisabled && pendingAction !== "download-docx" ? 0.45 : 1,
+            opacity: downloadDisabled && pendingAction !== "download-native" ? 0.45 : 1,
             transition: "all 150ms",
           }}
         >
-          {pendingAction === "download-docx"
+          {pendingAction === "download-native"
             ? <LoaderCircle style={{ width: 13, height: 13, animation: "spin 1s linear infinite" }} />
-            : <FileDown style={{ width: 13, height: 13 }} />} DOCX
+            : <FileDown style={{ width: 13, height: 13 }} />} {nativeDownloadLabel}
         </button>
 
         <a
@@ -261,29 +263,6 @@ export function HistoryActions({
           }}
         >
           <ShieldCheck style={{ width: 13, height: 13 }} /> Validar
-        </a>
-
-        <a
-          href={whatsappUrl}
-          title="Compartilhar pelo WhatsApp"
-          target="_blank"
-          rel="noreferrer"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "0.3rem",
-            height: 34,
-            padding: "0 0.75rem",
-            borderRadius: "var(--radius-sm)",
-            background: "var(--surface-2)",
-            border: "1px solid var(--border-muted)",
-            fontSize: "0.75rem",
-            fontWeight: 700,
-            color: "var(--text-secondary)",
-            textDecoration: "none",
-          }}
-        >
-          <MessageCircle style={{ width: 13, height: 13 }} /> WhatsApp
         </a>
 
         {canManage ? (

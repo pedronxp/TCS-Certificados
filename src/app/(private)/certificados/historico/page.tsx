@@ -5,6 +5,7 @@ import { HistoryTable, type HistoryIssue } from "@/components/certificates/histo
 import { requireUser } from "@/lib/auth";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
+import { getTemplateNativeFileType } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import { normalizeVerificationCode } from "@/lib/verification-code";
 
@@ -63,6 +64,7 @@ export default async function CertificateHistoryPage({
       template: {
         select: {
           name: true,
+          layout: true,
         },
       },
       issuedBy: {
@@ -77,6 +79,7 @@ export default async function CertificateHistoryPage({
   const hasNextPage = rows.length > pageSize;
   const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => {
     const documentExpired = isCertificateDocumentExpired(issue.deleteAt, now);
+    const nativeFileType = getTemplateNativeFileType(issue.template.layout);
 
     return {
       id: issue.id,
@@ -94,6 +97,8 @@ export default async function CertificateHistoryPage({
       company: getCompanyName(issue.values),
       templateName: issue.template.name,
       issuedByName: issue.issuedBy.name,
+      nativeDownloadType: nativeFileType.toLowerCase() as "docx" | "pptx",
+      nativeDownloadLabel: nativeFileType,
     };
   });
   const start = issues.length ? (filters.page - 1) * pageSize + 1 : 0;

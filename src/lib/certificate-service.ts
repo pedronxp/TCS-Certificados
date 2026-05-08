@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { formatTemplateFieldValue, mirrorTemplateFieldValues } from "@/lib/template-variable-fields";
 import {
   DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE,
-  renderDocxBuffer,
+  renderNativeCertificateBuffer,
   renderPdfBuffer,
   type RenderInput,
 } from "@/lib/render-certificate";
@@ -64,13 +64,12 @@ export async function issueCertificate({
   const recipientDocument = findDocumentValue(normalizedValues);
 
   const renderInput = { template, values: normalizedValues.original, verificationCode, appUrl };
-  const docx = await renderDocxBuffer(renderInput);
+  const nativeFile = await renderNativeCertificateBuffer(renderInput);
   const pdf = await renderPdfBufferSafely(renderInput);
   const pdfFilename = `${recipientName}-${verificationCode}.pdf`;
-  const docxFilename = buildDocxFilename(recipientName, template.name);
+  const nativeFilename = buildNativeFilename(recipientName, template.name, nativeFile.extension);
   const pdfMimeType = "application/pdf";
-  const docxMimeType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-  const [pdfStoragePath, docxStoragePath] = await Promise.all([
+  const [pdfStoragePath, nativeStoragePath] = await Promise.all([
     pdf
       ? uploadCertificateFileSafely({
           buffer: pdf,
@@ -80,9 +79,9 @@ export async function issueCertificate({
         })
       : null,
     uploadCertificateFileSafely({
-      buffer: docx,
-      filename: docxFilename,
-      mimeType: docxMimeType,
+      buffer: nativeFile.buffer,
+      filename: nativeFilename,
+      mimeType: nativeFile.mimeType,
       verificationCode,
     }),
   ]);
@@ -109,15 +108,15 @@ export async function issueCertificate({
             type: "PDF",
             filename: pdfFilename,
             mimeType: pdfMimeType,
-            content: pdf,
+            content: pdf ? toPrismaBytes(pdf) : null,
             storagePath: pdfStoragePath,
           },
           {
-            type: "DOCX",
-            filename: docxFilename,
-            mimeType: docxMimeType,
-            content: docx,
-            storagePath: docxStoragePath,
+            type: nativeFile.type,
+            filename: nativeFilename,
+            mimeType: nativeFile.mimeType,
+            content: toPrismaBytes(nativeFile.buffer),
+            storagePath: nativeStoragePath,
           },
         ],
       },
@@ -209,7 +208,7 @@ async function renderPdfBufferSafely(input: RenderInput) {
     return await renderPdfBuffer(input);
   } catch (error) {
     if (error instanceof Error && error.message === DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE) {
-      console.warn("PDF nao gerado; conversor DOCX para PDF indisponivel.", error.message);
+      console.warn("PDF nao gerado; conversor Office para PDF indisponivel.", error.message);
       return null;
     }
 
@@ -408,8 +407,8 @@ function normalizeKey(value: string) {
     .replace(/^_+|_+$/g, "");
 }
 
-function buildDocxFilename(recipientName: string, templateName: string) {
-  return `${sanitizeFilenamePart(recipientName)}-${sanitizeFilenamePart(templateName)}.docx`;
+function buildNativeFilename(recipientName: string, templateName: string, extension: string) {
+  return `${sanitizeFilenamePart(recipientName)}-${sanitizeFilenamePart(templateName)}.${extension}`;
 }
 
 function sanitizeFilenamePart(value: string) {
@@ -421,4 +420,8 @@ function sanitizeFilenamePart(value: string) {
       .replace(/\s+/g, " ")
       .trim() || "certificado"
   );
+}
+
+function toPrismaBytes(buffer: Buffer) {
+  return Uint8Array.from(buffer);
 }

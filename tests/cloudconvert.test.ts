@@ -173,13 +173,13 @@ test("converts PPTX through CloudConvert job upload flow", async () => {
     inputFormat: "pptx",
     fileName: "certificate.pptx",
     mimeType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    engine: "office",
   });
 
   assert.deepEqual([...pdf ?? []], [0x25, 0x50, 0x44, 0x46]);
-  assert.equal(
-    (((createJobBody?.tasks as Record<string, Record<string, unknown>>) ?? {})["convert-pptx"] ?? {}).input_format,
-    "pptx",
-  );
+  const tasks = ((createJobBody as { tasks?: Record<string, Record<string, unknown>> } | null)?.tasks ?? {});
+  assert.equal((tasks["convert-pptx"] ?? {}).input_format, "pptx");
+  assert.equal((tasks["convert-pptx"] ?? {}).engine, "office");
 });
 
 function jsonResponse(body: unknown) {
