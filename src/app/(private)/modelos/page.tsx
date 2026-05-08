@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { BadgeCheck } from "lucide-react";
+import { BadgeCheck, Eye, Pencil } from "lucide-react";
 import { TemplateActions } from "@/components/templates/template-actions";
 import { CertificateTemplatePreview, getTemplatePreviewImage } from "@/components/templates/certificate-template-preview";
 import { UploadTemplateButton } from "@/components/templates/upload-template-button";
@@ -49,7 +49,7 @@ export default async function TemplatesPage() {
                 imageSrc={getTemplatePreviewImage(template)}
               />
               <Link
-                href={`/modelos/${template.id}/editar`}
+                href={`/modelos/${template.id}`}
                 style={{ display: "block", textDecoration: "none", marginTop: "1rem", marginBottom: "1rem" }}
               >
                 <h2
@@ -84,7 +84,37 @@ export default async function TemplatesPage() {
                 <span className="chip">{template.orientation}</span>
               </div>
 
-              <div style={{ display: "flex", gap: "0.5rem" }}>
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                  <Link
+                    href={`/modelos/${template.id}`}
+                    className="btn btn-ghost"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.375rem",
+                      fontSize: "0.8125rem",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Eye style={{ width: 14, height: 14 }} />
+                    Visualizar
+                  </Link>
+                  <Link
+                    href={`/modelos/${template.id}/editar`}
+                    className="btn btn-ghost"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.375rem",
+                      fontSize: "0.8125rem",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Pencil style={{ width: 14, height: 14 }} />
+                    Editar
+                  </Link>
+                </div>
                 <Link
                   href={`/certificados/emitir?template=${template.id}`}
                   className="btn btn-primary"
@@ -100,7 +130,9 @@ export default async function TemplatesPage() {
                   <BadgeCheck style={{ width: 14, height: 14 }} />
                   Emitir
                 </Link>
-                <TemplateActions id={template.id} />
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <TemplateActions id={template.id} />
+                </div>
               </div>
             </article>
           ))}

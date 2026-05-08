@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { requireAdmin, requireUser } from "@/lib/auth";
-import { defaultLayout, extractVariables, templateLayoutSchema } from "@/lib/certificate-layout";
+import { defaultLayout, extractVariables, normalizeVisualDocxLayout, templateLayoutSchema } from "@/lib/certificate-layout";
 import { prisma } from "@/lib/prisma";
+import { validateTemplatePayloadSize } from "@/lib/upload-limits";
 
 export async function GET() {
   await requireUser();
@@ -16,7 +17,12 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await requireAdmin();
   const body = await request.json();
-  const layout = templateLayoutSchema.parse(body.layout ?? defaultLayout());
+  const payloadError = validateTemplatePayloadSize(body);
+  if (payloadError) {
+    return NextResponse.json({ error: payloadError }, { status: 413 });
+  }
+
+  const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse(body.layout ?? defaultLayout()));
   const variables = extractVariables(layout);
 
   const template = await prisma.certificateTemplate.create({

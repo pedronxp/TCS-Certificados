@@ -68,6 +68,14 @@ export function formatDateLongPtBr(value: string) {
   return `${date.day} de ${MONTHS_PT[date.month - 1]} de ${date.year}`;
 }
 
+export function formatMonthYearPtBr(value: string) {
+  const trimmed = String(value ?? "").trim();
+  const date = parseMonthYearParts(trimmed);
+  if (!date) return trimmed;
+
+  return `${MONTHS_PT[date.month - 1]} de ${date.year}`;
+}
+
 function isDateFieldKey(value: string) {
   return DATE_FIELD_KEY_SET.has(value) || isLongDateKey(value);
 }
@@ -96,6 +104,30 @@ function parseDateParts(value: string) {
   return null;
 }
 
+function parseMonthYearParts(value: string) {
+  const isoMonthMatch = value.match(/^(\d{4})-(\d{2})$/);
+  if (isoMonthMatch) {
+    return validMonthYearParts(Number(isoMonthMatch[1]), Number(isoMonthMatch[2]));
+  }
+
+  const isoDateMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDateMatch) {
+    return validMonthYearParts(Number(isoDateMatch[1]), Number(isoDateMatch[2]));
+  }
+
+  const brMonthMatch = value.match(/^(\d{1,2})[./-](\d{4})$/);
+  if (brMonthMatch) {
+    return validMonthYearParts(Number(brMonthMatch[2]), Number(brMonthMatch[1]));
+  }
+
+  const brDateMatch = value.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (brDateMatch) {
+    return validMonthYearParts(Number(brDateMatch[3]), Number(brDateMatch[2]));
+  }
+
+  return null;
+}
+
 function validDateParts(year: number, month: number, day: number) {
   if (!year || !month || !day || month < 1 || month > 12) return null;
 
@@ -109,4 +141,9 @@ function validDateParts(year: number, month: number, day: number) {
   }
 
   return { year, month, day };
+}
+
+function validMonthYearParts(year: number, month: number) {
+  if (!year || !month || month < 1 || month > 12) return null;
+  return { year, month };
 }

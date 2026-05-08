@@ -36,12 +36,12 @@ export function TemplateActions({ id }: { id: string }) {
   }
 
   return (
-    <div className="mt-4 flex gap-2">
+    <div className="flex gap-2">
       {confirmationDialog}
-      <button onClick={duplicate} className="icon-button" title="Duplicar modelo">
+      <button type="button" onClick={duplicate} className="icon-button" title="Duplicar modelo" aria-label="Duplicar modelo">
         <Copy className="size-4" />
       </button>
-      <button onClick={remove} className="icon-button" title="Excluir modelo">
+      <button type="button" onClick={remove} className="icon-button" title="Excluir modelo" aria-label="Excluir modelo">
         <Trash2 className="size-4" />
       </button>
     </div>

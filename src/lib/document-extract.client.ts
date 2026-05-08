@@ -1,10 +1,13 @@
 import { extractVariableKeys } from "@/lib/certificate-layout";
-import type { TemplateElement, TemplatePageBorder } from "@/lib/certificate-layout";
+import type { TemplateBaseAsset, TemplateElement, TemplatePageBorder } from "@/lib/certificate-layout";
+import { isPdfDataUrl } from "@/lib/pdf-preview.client";
 
-type ExtractedDocumentPage = {
+export type ExtractedDocumentPage = {
+  index?: number;
   width: number;
   height: number;
   orientation: "landscape" | "portrait";
+  imageDataUrl?: string;
   border?: TemplatePageBorder;
 };
 
@@ -13,16 +16,23 @@ type ExtractedDocumentPreview = {
   editable: boolean;
   elements: TemplateElement[];
   page?: ExtractedDocumentPage;
+  pages?: ExtractedDocumentPage[];
   renderDataUrl?: string;
   renderFileType?: string;
   renderEngine?: string;
   imageDataUrl?: string;
   imageEngine?: string;
+  assets?: TemplateBaseAsset[];
   variables?: string[];
+  converterOffline?: boolean;
 };
 
 export async function extractDocumentPreview(file: File): Promise<ExtractedDocumentPreview> {
-  if (!isDocx(file)) {
+  if (isPdf(file)) {
+    return buildPdfPreviewFromDataUrl(await readFileAsDataUrl(file), file.type || "application/pdf");
+  }
+
+  if (!isDocx(file) && !isPptx(file)) {
     return {
       previewHtml: undefined,
       editable: false,
@@ -31,22 +41,66 @@ export async function extractDocumentPreview(file: File): Promise<ExtractedDocum
     };
   }
 
+  const arrayBuffer = await file.arrayBuffer();
   const serverPreview = await extractDocumentPreviewFromApi(file);
-  if (serverPreview) return serverPreview;
+  if (serverPreview) {
+    const visualPreview = await withPdfPageImages(serverPreview);
+    const page = visualPreview.page ?? (isDocx(file) ? await extractDocxPage(arrayBuffer) : undefined);
+    const pages = normalizeExtractedPages(visualPreview.pages, page);
+    const elements = isDocx(file) && visualPreview.editable
+      ? visualPreview.elements.length > 0
+        ? visualPreview.elements
+        : await extractEditableElementsSafely(arrayBuffer, page)
+      : [];
+
+    return {
+      ...visualPreview,
+      editable: elements.length > 0,
+      elements,
+      page: growPageToFit(page, elements),
+      pages,
+    };
+  }
+
+  if (isPptx(file)) {
+    return {
+      previewHtml: undefined,
+      editable: false,
+      elements: [],
+      variables: [],
+    };
+  }
 
   const mammoth = await import("mammoth/mammoth.browser");
-  const arrayBuffer = await file.arrayBuffer();
   const result = await mammoth.extractRawText({ arrayBuffer });
   const previewHtml = rawTextToPreviewHtml(result.value);
   const page = await extractDocxPage(arrayBuffer);
-
   return {
     previewHtml,
     editable: false,
-    elements: [] as TemplateElement[],
+    elements: [],
     page,
+    pages: page ? [page] : undefined,
     variables: extractVariableKeys(result.value),
   };
+}
+
+export async function extractDocumentPreviewFromDataUrl({
+  dataUrl,
+  fileName,
+  fileType,
+}: {
+  dataUrl: string;
+  fileName?: string;
+  fileType?: string;
+}) {
+  const bytes = dataUrlToUint8Array(dataUrl);
+  const normalizedFileType = normalizeBrowserFileType(fileType, fileName);
+  const file = new File([bytes], fileName || defaultFileNameForType(normalizedFileType), {
+    type: normalizedFileType,
+  });
+
+  return extractDocumentPreview(file);
 }
 
 async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocumentPreview | null> {
@@ -67,8 +121,13 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       renderEngine?: string;
       imageDataUrl?: string;
       imageEngine?: string;
+      assets?: TemplateBaseAsset[];
       page?: ExtractedDocumentPage;
+      pages?: ExtractedDocumentPage[];
       variables?: string[];
+      editable?: boolean;
+      elements?: TemplateElement[];
+      converterOffline?: boolean;
     };
 
     return {
@@ -78,10 +137,13 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
       renderEngine: preview.renderEngine,
       imageDataUrl: preview.imageDataUrl,
       imageEngine: preview.imageEngine,
+      assets: preview.assets ?? [],
       page: preview.page,
-      editable: false,
-      elements: [],
+      pages: preview.pages,
+      editable: Boolean(preview.editable),
+      elements: preview.elements ?? [],
       variables: preview.variables ?? extractVariableKeys(preview.previewHtml ?? ""),
+      converterOffline: preview.converterOffline,
     };
   } catch (error) {
     console.warn("Preview DOCX via API indisponivel; usando fallback no navegador.", error);
@@ -89,11 +151,334 @@ async function extractDocumentPreviewFromApi(file: File): Promise<ExtractedDocum
   }
 }
 
+export async function extractEditableDocxElementsFromDataUrl(
+  dataUrl: string,
+  page: ExtractedDocumentPage | undefined,
+) {
+  const bytes = dataUrlToUint8Array(dataUrl);
+  const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  return extractEditableElementsSafely(arrayBuffer, page);
+}
+
 function isDocx(file: File) {
   return (
     file.type.includes("wordprocessingml") ||
     file.name.toLowerCase().endsWith(".docx")
   );
+}
+
+function isPptx(file: File) {
+  return (
+    file.type.includes("presentationml") ||
+    file.name.toLowerCase().endsWith(".pptx")
+  );
+}
+
+function isPdf(file: File) {
+  return file.type.toLowerCase().includes("pdf") || file.name.toLowerCase().endsWith(".pdf");
+}
+
+async function buildPdfPreviewFromDataUrl(dataUrl: string, fileType: string): Promise<ExtractedDocumentPreview> {
+  try {
+    const { renderPdfPagesFromDataUrl } = await import("@/lib/pdf-preview.client");
+    const pages = await renderPdfPagesFromDataUrl(dataUrl);
+    const page = pages[0];
+
+    return {
+      previewHtml: undefined,
+      editable: false,
+      elements: [],
+      page,
+      pages,
+      renderDataUrl: dataUrl,
+      renderFileType: fileType,
+      renderEngine: "pdfjs",
+      imageDataUrl: page?.imageDataUrl,
+      imageEngine: page?.imageDataUrl ? "pdfjs" : undefined,
+      variables: [],
+    };
+  } catch (error) {
+    console.warn("Nao foi possivel renderizar o PDF para preview.", error);
+    return {
+      previewHtml: undefined,
+      editable: false,
+      elements: [],
+      renderDataUrl: dataUrl,
+      renderFileType: fileType,
+      renderEngine: "pdf",
+      variables: [],
+    };
+  }
+}
+
+async function withPdfPageImages(preview: ExtractedDocumentPreview): Promise<ExtractedDocumentPreview> {
+  if (preview.editable && preview.elements.length > 0) return preview;
+
+  const renderDataUrl = preview.renderDataUrl;
+  if (!renderDataUrl || !isPdfDataUrl(renderDataUrl)) return preview;
+  if (preview.pages?.some((page) => page.imageDataUrl)) return preview;
+
+  try {
+    const { renderPdfPagesFromDataUrl } = await import("@/lib/pdf-preview.client");
+    const renderedPages = await renderPdfPagesFromDataUrl(renderDataUrl);
+    if (renderedPages.length === 0) return preview;
+
+    const pages = mergeRenderedPages(preview.pages, renderedPages);
+
+    return {
+      ...preview,
+      page: pages[0] ?? preview.page,
+      pages,
+      imageDataUrl: pages[0]?.imageDataUrl ?? preview.imageDataUrl,
+      imageEngine: pages[0]?.imageDataUrl ? "pdfjs-gotenberg" : preview.imageEngine,
+    };
+  } catch (error) {
+    console.warn("Nao foi possivel renderizar o PDF do conversor para preview.", error);
+    return preview;
+  }
+}
+
+function mergeRenderedPages(
+  currentPages: ExtractedDocumentPage[] | undefined,
+  renderedPages: ExtractedDocumentPage[],
+) {
+  return renderedPages.map((page, index) => {
+    const current = currentPages?.[index];
+
+    return {
+      ...current,
+      ...page,
+      index: current?.index ?? page.index ?? index,
+      border: current?.border ?? page.border,
+    };
+  });
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function normalizeBrowserFileType(fileType: string | undefined, fileName: string | undefined) {
+  const lowerType = fileType?.toLowerCase() ?? "";
+  const lowerName = fileName?.toLowerCase() ?? "";
+
+  if (lowerType.includes("pdf") || lowerName.endsWith(".pdf")) return "application/pdf";
+  if (lowerType.includes("wordprocessingml") || lowerName.endsWith(".docx")) {
+    return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+  if (lowerType.includes("presentationml") || lowerName.endsWith(".pptx")) {
+    return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+  }
+
+  return fileType && fileType.includes("/")
+    ? fileType
+    : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+}
+
+function defaultFileNameForType(fileType: string) {
+  if (fileType.includes("presentationml")) return "documento.pptx";
+  return fileType.includes("pdf") ? "documento.pdf" : "documento.docx";
+}
+
+async function extractEditableElementsSafely(
+  arrayBuffer: ArrayBuffer,
+  page: ExtractedDocumentPage | undefined,
+) {
+  try {
+    return await renderDocxToEditableElements(arrayBuffer, page);
+  } catch (error) {
+    console.warn("Nao foi possivel converter o DOCX em elementos editaveis.", error);
+    return [] as TemplateElement[];
+  }
+}
+
+async function renderDocxToEditableElements(
+  arrayBuffer: ArrayBuffer,
+  page: ExtractedDocumentPage | undefined,
+) {
+  if (typeof document === "undefined") return [] as TemplateElement[];
+
+  const { renderAsync } = await import("docx-preview");
+  const host = document.createElement("div");
+  host.style.position = "fixed";
+  host.style.left = "-20000px";
+  host.style.top = "0";
+  host.style.width = `${page?.width ?? 1123}px`;
+  host.style.minHeight = `${page?.height ?? 794}px`;
+  host.style.pointerEvents = "none";
+  host.style.opacity = "0";
+  document.body.appendChild(host);
+
+  try {
+    await renderAsync(arrayBuffer.slice(0), host, undefined, {
+      className: "docx-editable",
+      inWrapper: false,
+      ignoreWidth: false,
+      ignoreHeight: false,
+      ignoreFonts: false,
+      breakPages: true,
+      ignoreLastRenderedPageBreak: false,
+      experimental: true,
+      useBase64URL: true,
+      renderHeaders: true,
+      renderFooters: true,
+      renderFootnotes: true,
+      renderEndnotes: true,
+    });
+    await waitForRenderedImages(host);
+    await nextAnimationFrame();
+    await nextAnimationFrame();
+    return extractRenderedEditableElements(host, page);
+  } finally {
+    host.remove();
+  }
+}
+
+function extractRenderedEditableElements(host: HTMLElement, page: ExtractedDocumentPage | undefined) {
+  const elements: TemplateElement[] = [];
+  const pageElements = Array.from(host.querySelectorAll<HTMLElement>("section.docx-editable"));
+  const pages = pageElements.length ? pageElements : [host.querySelector<HTMLElement>("section") ?? host];
+
+  pages.forEach((pageElement, pageIndex) => {
+    const pageRect = pageElement.getBoundingClientRect();
+    const pageWidth = Math.max(1, Math.round(page?.width ?? pageRect.width ?? 1123));
+
+    for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("img"))) {
+      const rect = relativeRect(graphic, pageRect);
+      if (!rect || rect.width < 6 || rect.height < 6) continue;
+
+      const content = graphic.getAttribute("src") || (graphic instanceof HTMLImageElement ? graphic.src : "");
+      if (!content) continue;
+
+      addImageElement(elements, content, rect, pageWidth, pageIndex);
+    }
+
+    for (const graphic of Array.from(pageElement.querySelectorAll<HTMLElement>("div,span"))) {
+      if (graphic.textContent?.trim()) continue;
+      const content = extractCssImageUrl(window.getComputedStyle(graphic).backgroundImage);
+      if (!content) continue;
+
+      const rect = relativeRect(graphic, pageRect);
+      if (!rect || rect.width < 6 || rect.height < 6) continue;
+      addImageElement(elements, content, rect, pageWidth, pageIndex);
+    }
+
+    for (const block of Array.from(pageElement.querySelectorAll<HTMLElement>("p,h1,h2,h3,h4,h5,h6,td,th"))) {
+      if ((block.tagName === "TD" || block.tagName === "TH") && block.querySelector("p,h1,h2,h3,h4,h5,h6")) {
+        continue;
+      }
+
+      const text = normalizeText(block.textContent ?? "");
+      if (!text) continue;
+
+      const rect = relativeRect(block, pageRect);
+      if (!rect || rect.width < 4 || rect.height < 4) continue;
+
+      const styleElement = firstTextElement(block) ?? block;
+      const blockStyle = window.getComputedStyle(block);
+      const textStyle = window.getComputedStyle(styleElement);
+      const fontSize = clamp(Math.round(parseCssPixels(textStyle.fontSize) || 14), 8, 72);
+      const x = clamp(Math.round(rect.x), 0, Math.max(0, pageWidth - 8));
+      const y = Math.max(0, Math.round(rect.y));
+      const singleVariableKey = extractSingleVariableKey(text);
+
+      elements.push({
+        id: randomId("text"),
+        type: singleVariableKey ? "variable" : "text",
+        content: text,
+        variableKey: singleVariableKey,
+        variableLabel: singleVariableKey,
+        variableRequired: true,
+        x,
+        y,
+        pageIndex,
+        width: clamp(Math.round(rect.width), 24, Math.max(24, pageWidth - x)),
+        height: Math.max(Math.round(rect.height), Math.ceil(fontSize * 1.35)),
+        fontSize,
+        fontFamily: normalizeFontFamily(textStyle.fontFamily),
+        color: cssColorToHex(textStyle.color),
+        align: normalizeAlign(blockStyle.textAlign),
+        bold: isBold(textStyle.fontWeight, block.tagName),
+        italic: textStyle.fontStyle === "italic" || textStyle.fontStyle === "oblique",
+        underline: textStyle.textDecorationLine.includes("underline"),
+        lineHeight: normalizeLineHeight(textStyle.lineHeight, fontSize),
+      });
+    }
+  });
+
+  return elements.sort((a, b) => (a.pageIndex ?? 0) - (b.pageIndex ?? 0) || a.y - b.y || a.x - b.x);
+}
+
+function addImageElement(
+  elements: TemplateElement[],
+  content: string,
+  rect: { x: number; y: number; width: number; height: number },
+  pageWidth: number,
+  pageIndex = 0,
+) {
+  const x = clamp(Math.round(rect.x), 0, pageWidth);
+  const y = Math.max(0, Math.round(rect.y));
+  const width = clamp(Math.round(rect.width), 8, pageWidth);
+  const height = Math.max(8, Math.round(rect.height));
+  const prefix = isWatermarkRect(rect, pageWidth) ? "watermark" : "image";
+  const duplicate = elements.some((element) =>
+    element.type === "image" &&
+    element.content === content &&
+    Math.abs(element.x - x) <= 2 &&
+    Math.abs(element.y - y) <= 2 &&
+    Math.abs(element.width - width) <= 2 &&
+    Math.abs(element.height - height) <= 2,
+  );
+  if (duplicate) return;
+
+  elements.push({
+    id: randomId(prefix),
+    type: "image",
+    content,
+    variableRequired: true,
+    x,
+    y,
+    pageIndex,
+    width,
+    height,
+    fontSize: 12,
+    fontFamily: "Arial",
+    color: "#111827",
+    align: "center",
+    bold: false,
+    italic: false,
+    underline: false,
+    lineHeight: 1.15,
+  });
+}
+
+function isWatermarkRect(
+  rect: { width: number; height: number },
+  pageWidth: number,
+) {
+  return rect.width >= pageWidth * 0.45 || rect.height >= 260;
+}
+
+function normalizeExtractedPages(
+  pages: ExtractedDocumentPage[] | undefined,
+  fallbackPage: ExtractedDocumentPage | undefined,
+) {
+  if (Array.isArray(pages) && pages.length > 0) {
+    return pages.map((page, index) => ({ ...page, index: page.index ?? index }));
+  }
+
+  return fallbackPage ? [{ ...fallbackPage, index: fallbackPage.index ?? 0 }] : undefined;
+}
+
+function extractCssImageUrl(value: string) {
+  const match = value.match(/^url\((.*)\)$/);
+  if (!match) return "";
+  return match[1].trim().replace(/^["']|["']$/g, "");
 }
 
 async function extractDocxPage(arrayBuffer: ArrayBuffer): Promise<ExtractedDocumentPage | undefined> {
@@ -187,6 +572,9 @@ export function htmlPreviewToEditableElements(html: string): TemplateElement[] {
         color: "#111827",
         align: "center",
         bold: false,
+        italic: false,
+        underline: false,
+        lineHeight: 1.15,
       });
       y += height + 18;
     }
@@ -216,6 +604,9 @@ export function htmlPreviewToEditableElements(html: string): TemplateElement[] {
       color: "#000000",
       align,
       bold,
+      italic: false,
+      underline: false,
+      lineHeight: 1.15,
     });
     y += height + 12;
   }
@@ -282,6 +673,130 @@ function readSize(element: Element, key: "width" | "height") {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function growPageToFit(page: ExtractedDocumentPage | undefined, elements: TemplateElement[]) {
+  if (!page) return undefined;
+  const maxBottom = Math.max(0, ...elements.map((element) => element.y + element.height));
+  if (maxBottom <= page.height) return page;
+  return {
+    ...page,
+    height: Math.ceil(maxBottom + 24),
+  };
+}
+
+function relativeRect(element: Element, pageRect: DOMRect) {
+  const rect = element.getBoundingClientRect();
+  if (!Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return null;
+
+  return {
+    x: rect.left - pageRect.left,
+    y: rect.top - pageRect.top,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function firstTextElement(element: Element) {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+
+  while (node) {
+    if (node.textContent?.trim()) {
+      return node.parentElement;
+    }
+    node = walker.nextNode();
+  }
+
+  return null;
+}
+
+function parseCssPixels(value: string) {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normalizeFontFamily(value: string) {
+  return value.split(",")[0]?.replaceAll('"', "").replaceAll("'", "").trim() || "Arial";
+}
+
+function normalizeAlign(value: string): "left" | "center" | "right" {
+  if (value === "center") return "center";
+  if (value === "right" || value === "end") return "right";
+  return "left";
+}
+
+function isBold(value: string, tagName: string) {
+  if (/^h[1-6]$/i.test(tagName)) return true;
+  if (value === "bold" || value === "bolder") return true;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 600;
+}
+
+function normalizeLineHeight(value: string, fontSize: number) {
+  const parsed = parseCssPixels(value);
+  if (parsed > 0 && fontSize > 0) return clamp(Math.round((parsed / fontSize) * 100) / 100, 0.8, 2.4);
+  return 1.15;
+}
+
+function cssColorToHex(value: string) {
+  const match = value.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  if (!match) return "#111827";
+  return `#${toHex(Number(match[1]))}${toHex(Number(match[2]))}${toHex(Number(match[3]))}`;
+}
+
+function toHex(value: number) {
+  return clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0");
+}
+
+function extractSingleVariableKey(text: string) {
+  const keys = extractVariableKeys(text);
+  return keys.length === 1 && /^\{\{\s*[^{}]+?\s*\}\}$/.test(text.trim()) ? keys[0] : undefined;
+}
+
+function randomId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+
+  return `${prefix}-${Math.random().toString(36).slice(2)}`;
+}
+
+function dataUrlToUint8Array(dataUrl: string) {
+  const base64 = dataUrl.includes(",") ? dataUrl.split(",")[1] : dataUrl;
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+
+  return bytes;
+}
+
+async function waitForRenderedImages(root: ParentNode) {
+  const images = Array.from(root.querySelectorAll("img"));
+  await Promise.all(
+    images.map((image) => {
+      if (image.complete && image.naturalWidth > 0) return undefined;
+
+      return new Promise<void>((resolve) => {
+        const timeoutId = window.setTimeout(resolve, 2000);
+        image.addEventListener("load", () => {
+          window.clearTimeout(timeoutId);
+          resolve();
+        }, { once: true });
+        image.addEventListener("error", () => {
+          window.clearTimeout(timeoutId);
+          resolve();
+        }, { once: true });
+      });
+    }),
+  );
+}
+
+function nextAnimationFrame() {
+  return new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
 }
 
 function fitElementsToPage(elements: TemplateElement[]) {

@@ -4,6 +4,7 @@ import { LogOut } from "lucide-react";
 import { Role } from "@prisma/client";
 import { AppTopbar } from "@/components/app-topbar";
 import { BatchProgressToast } from "@/components/certificates/batch-progress-toast";
+import { BrandLogo } from "@/components/brand-logo";
 import { SidebarNav } from "@/components/sidebar-nav";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -37,7 +38,9 @@ export function AppShell({
 
       <aside className="sidebar">
         <Link href="/dashboard" className="sidebar-logo-link">
-          <span className="sidebar-logo-mark">TC</span>
+          <span className="sidebar-logo-mark brand-logo-mark" aria-hidden="true">
+            <BrandLogo decorative priority sizes="56px" />
+          </span>
           <span className="sidebar-logo-text">
             <span className="sidebar-logo-title">TCS Certificados</span>
             <span className="sidebar-logo-subtitle">Painel de emissão</span>

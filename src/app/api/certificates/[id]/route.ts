@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import { requireAdmin } from "@/lib/auth";
-import { deleteCertificateIssue } from "@/lib/certificate-service";
+import { expireCertificateDocuments } from "@/lib/certificate-service";
 import { prisma } from "@/lib/prisma";
 
 export async function PATCH(
@@ -18,7 +18,7 @@ export async function PATCH(
 
     if (deleteAt === false) {
       return NextResponse.json(
-        { error: "Informe uma data de exclusão válida." },
+        { error: "Informe uma data de expiracao valida." },
         { status: 400 },
       );
     }
@@ -70,9 +70,9 @@ export async function DELETE(
 ) {
   await requireAdmin();
   const { id } = await context.params;
-  const deleted = await deleteCertificateIssue(id);
+  const expired = await expireCertificateDocuments([id]);
 
-  if (!deleted) {
+  if (!expired) {
     return NextResponse.json(
       { error: "Certificado não encontrado." },
       { status: 404 },

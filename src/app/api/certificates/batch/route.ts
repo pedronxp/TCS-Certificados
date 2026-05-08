@@ -1,12 +1,34 @@
 import { NextResponse } from "next/server";
 import { parse } from "csv-parse/sync";
-import * as XLSX from "xlsx";
+import { readSheet, type CellValue } from "read-excel-file/node";
 import { requireAdmin } from "@/lib/auth";
-import { getBatchJob, startBatchJob } from "@/lib/batch-jobs";
+import { failStaleBatchJobs, getBatchJob, processBatchJobChunk, startBatchJob } from "@/lib/batch-jobs";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
+import { prisma } from "@/lib/prisma";
+import {
+  formatTemplateFieldValue,
+  getTemplateDuplicateKey,
+  getTemplateFieldAliases,
+  getTemplateVariableLabel,
+  isTemplateBatchPersonField,
+  isTemplateRecipientField,
+  mirrorTemplateFieldValues,
+  validateTemplateFieldValue,
+} from "@/lib/template-variable-fields";
+import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const companyColumns = ["empresa", "company"];
 const dateColumns = [...DATE_FIELD_KEYS];
+
+type BatchRouteVariable = {
+  key: string;
+  label: string;
+  required: boolean;
+};
 
 export async function POST(request: Request) {
   const user = await requireAdmin();
@@ -15,9 +37,41 @@ export async function POST(request: Request) {
   const file = formData.get("file");
   const hasUploadedFile = file instanceof File && file.size > 0 && Boolean(file.name);
 
-  const rows = hasUploadedFile ? await parseRows(file) : parseManualRows(formData);
+  const template = await prisma.certificateTemplate.findUnique({
+    where: { id: templateId },
+    select: {
+      variables: {
+        select: { key: true, label: true, required: true },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+  });
+
+  if (!template) {
+    return NextResponse.json({ error: "Modelo nao encontrado." }, { status: 404 });
+  }
+
+  const supportError = validateTemplateBatchSupport(template.variables);
+  if (supportError) {
+    return NextResponse.json({ error: supportError }, { status: 400 });
+  }
+
+  if (hasUploadedFile) {
+    const fileError = validateBatchSpreadsheetFile(file);
+    if (fileError) {
+      return NextResponse.json({ error: fileError }, { status: 400 });
+    }
+  }
+
+  const parsedRows = hasUploadedFile ? await parseRows(file) : parseManualRows(formData);
+  const rows = normalizeRowsForTemplate(parsedRows, template.variables);
   if (!rows.length) {
     return NextResponse.json({ error: "Informe os nomes ou envie uma planilha." }, { status: 400 });
+  }
+
+  const rowCountError = validateBatchRowCount(rows.length);
+  if (rowCountError) {
+    return NextResponse.json({ error: rowCountError }, { status: 400 });
   }
 
   const batchRuleError = validateSingleCompanyAndDate(rows);
@@ -25,9 +79,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: batchRuleError }, { status: 400 });
   }
 
-  const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset: hasUploadedFile ? 2 : 1 });
+  const templateRowsError = validateTemplateRows(rows, template.variables, hasUploadedFile ? 2 : 1);
+  if (templateRowsError) {
+    return NextResponse.json({ error: templateRowsError }, { status: 400 });
+  }
 
-  return NextResponse.json({ jobId: job.id, total: job.total, status: job.status.toLowerCase() }, { status: 202 });
+  try {
+    const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset: hasUploadedFile ? 2 : 1 });
+
+    return NextResponse.json({
+      jobId: job.id,
+      total: job.total,
+      processed: job.processed,
+      created: job.created,
+      errors: Array.isArray(job.errors) ? job.errors : [],
+      status: job.status.toLowerCase(),
+    }, { status: 201 });
+  } catch (error) {
+    console.error("Falha ao gerar lote", error);
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Falha ao gerar lote." },
+      { status: 400 },
+    );
+  }
 }
 
 export async function GET(request: Request) {
@@ -38,9 +112,17 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Informe o lote." }, { status: 400 });
   }
 
-  const job = await getBatchJob(jobId, user.id);
+  await failStaleBatchJobs().catch((error) => {
+    console.error("Falha ao encerrar lotes interrompidos", error);
+  });
+
+  let job = await getBatchJob(jobId, user.id);
   if (!job) {
     return NextResponse.json({ error: "Lote nao encontrado." }, { status: 404 });
+  }
+
+  if (job.status === "RUNNING") {
+    job = (await processBatchJobChunk(job.id, user.id)) ?? job;
   }
 
   const progress = job.total ? Math.round((job.processed / job.total) * 100) : 0;
@@ -57,6 +139,9 @@ export async function GET(request: Request) {
 }
 
 function parseManualRows(formData: FormData) {
+  const peopleRows = parsePeopleRows(formData);
+  if (peopleRows) return peopleRows;
+
   const rawNames = String(formData.get("names") ?? "");
   const rawDocuments = String(formData.get("documents") ?? "");
   const empresa = String(formData.get("empresa") ?? "").trim();
@@ -88,6 +173,58 @@ function parseManualRows(formData: FormData) {
 
     return row;
   });
+}
+
+function parsePeopleRows(formData: FormData) {
+  const rawPeopleRows = formData.get("peopleRows");
+  if (typeof rawPeopleRows !== "string" || !rawPeopleRows.trim()) return null;
+
+  let peopleRows: unknown;
+  try {
+    peopleRows = JSON.parse(rawPeopleRows);
+  } catch {
+    return null;
+  }
+
+  if (!Array.isArray(peopleRows)) return null;
+
+  const recipientKey = String(formData.get("recipientKey") ?? "nome").trim() || "nome";
+  const sharedValues = readSharedValues(formData);
+
+  return peopleRows
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const values: Record<string, string> = { ...sharedValues };
+
+      for (const [key, value] of Object.entries(item as Record<string, unknown>)) {
+        values[key] = String(value ?? "").trim();
+      }
+
+      if (values[recipientKey]) {
+        values.nome ??= values[recipientKey];
+      }
+
+      return values;
+    })
+    .filter((row): row is Record<string, string> => Boolean(row && Object.values(row).some((value) => value.trim())));
+}
+
+function readSharedValues(formData: FormData) {
+  const sharedValues: Record<string, string> = {
+    empresa: String(formData.get("empresa") ?? "").trim(),
+    data: String(formData.get("data") ?? "").trim(),
+  };
+
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("values.")) continue;
+
+    const valueKey = key.slice("values.".length);
+    if (valueKey) {
+      sharedValues[valueKey] = String(value ?? "").trim();
+    }
+  }
+
+  return sharedValues;
 }
 
 function parseManualPeople(namesValue: string, documentsValue: string, hasDocumentKey: boolean) {
@@ -164,9 +301,111 @@ async function parseRows(file: File): Promise<Record<string, string>[]> {
     }));
   }
 
-  const workbook = XLSX.read(buffer, { type: "buffer" });
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  return normalizeRows(XLSX.utils.sheet_to_json<Record<string, string>>(sheet, { defval: "" }));
+  const [headerRow = [], ...dataRows] = await readSheet(buffer);
+  const headers = headerRow.map((value) => formatCellValue(value));
+
+  return normalizeRows(
+    dataRows
+      .map((row) => rowToObject(headers, row))
+      .filter((row) => Object.values(row).some((value) => String(value ?? "").trim())),
+  );
+}
+
+function rowToObject(headers: string[], row: Array<CellValue | null>) {
+  const data: Record<string, unknown> = {};
+
+  for (const [index, header] of headers.entries()) {
+    if (header) data[header] = row[index] ?? "";
+  }
+
+  return data;
+}
+
+function normalizeRowsForTemplate(
+  rows: Record<string, string>[],
+  variables: BatchRouteVariable[],
+) {
+  return rows.map((row) => {
+    const normalizedRow = { ...row };
+
+    for (const variable of variables) {
+      const value = findValueForVariable(row, variable);
+      if (value) {
+        normalizedRow[variable.key] = formatTemplateFieldValue(variable, value);
+      }
+    }
+
+    return mirrorTemplateFieldValues(variables, normalizedRow);
+  });
+}
+
+function findValueForVariable(row: Record<string, string>, variable: BatchRouteVariable) {
+  for (const alias of getTemplateFieldAliases(variable)) {
+    const value = findColumnValue(row, alias);
+    if (value.trim()) return value;
+  }
+
+  return "";
+}
+
+function findColumnValue(row: Record<string, string>, alias: string) {
+  const normalizedAlias = normalizeHeader(alias);
+  for (const [key, value] of Object.entries(row)) {
+    if (normalizeHeader(key) === normalizedAlias) {
+      return String(value ?? "").trim();
+    }
+  }
+
+  return "";
+}
+
+function validateTemplateBatchSupport(variables: BatchRouteVariable[]) {
+  const personVariables = variables.filter(isTemplateBatchPersonField);
+  if (!personVariables.length || !personVariables.some(isTemplateRecipientField)) {
+    return "Este modelo precisa de um campo de aluno/nome para emissao em lote.";
+  }
+
+  return null;
+}
+
+function validateTemplateRows(
+  rows: Record<string, string>[],
+  variables: BatchRouteVariable[],
+  lineOffset: number,
+) {
+  const seen = new Map<string, number>();
+
+  for (const [index, row] of rows.entries()) {
+    const line = index + lineOffset;
+
+    for (const variable of variables) {
+      const value = String(row[variable.key] ?? "").trim();
+      const label = getTemplateVariableLabel(variable);
+
+      if (variable.required && !value) {
+        return `Linha ${line}: informe ${label}.`;
+      }
+
+      const validationError = validateTemplateFieldValue(variable, value);
+      if (validationError) {
+        return `Linha ${line}: ${label} invalido. ${validationError}`;
+      }
+
+      if (isTemplateBatchPersonField(variable)) {
+        const duplicateKey = getTemplateDuplicateKey(variable, value);
+        if (duplicateKey) {
+          const firstLine = seen.get(duplicateKey);
+          if (firstLine) {
+            return `Linha ${line}: ${label} duplicado da linha ${firstLine}.`;
+          }
+
+          seen.set(duplicateKey, line);
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function validateSingleCompanyAndDate(rows: Record<string, string>[]) {

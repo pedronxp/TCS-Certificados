@@ -14,14 +14,18 @@ export type HistoryIssue = {
   status: CertificateStatus;
   issuedAt: string;
   revokedAt: string | null;
-  deleteAt: string;
+  deleteAt: string | null;
   hiddenAt: string | null;
+  documentExpired: boolean;
+  documentAvailable: boolean;
   recipientName: string;
   recipientEmail: string | null;
   recipientDocument: string | null;
   company: string;
   templateName: string;
   issuedByName: string;
+  nativeDownloadType: "docx" | "pptx";
+  nativeDownloadLabel: "DOCX" | "PPTX";
 };
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", {
@@ -64,9 +68,9 @@ export function HistoryTable({
   async function deleteSelected() {
     if (!selectedIds.length || bulkDeleting) return;
     const confirmed = await confirm({
-      title: "Deletar selecionados",
-      message: `Deletar ${selectedIds.length} certificado(s) selecionado(s)? Os arquivos gerados também serão removidos.`,
-      confirmLabel: "Deletar",
+      title: "Remover documentos selecionados",
+      message: `Remover os arquivos de ${selectedIds.length} certificado(s)? Os codigos e a validacao continuam no sistema.`,
+      confirmLabel: "Remover documentos",
       tone: "danger",
     });
     if (!confirmed) return;
@@ -79,7 +83,7 @@ export function HistoryTable({
       });
       if (!response.ok) {
         const result = await response.json().catch(() => null);
-        alert(result?.error ?? "Não foi possível deletar os certificados selecionados.");
+        alert(result?.error ?? "Nao foi possivel remover os documentos selecionados.");
         return;
       }
       setSelectedIds([]);
@@ -175,7 +179,7 @@ export function HistoryTable({
             {bulkDeleting
               ? <LoaderCircle style={{ width: 14, height: 14, animation: "spin 1s linear infinite" }} />
               : <Trash2 style={{ width: 14, height: 14 }} />}
-            Deletar selecionados
+            Remover documentos
           </button>
         )}
       </div>
@@ -235,20 +239,16 @@ export function HistoryTable({
                 </div>
 
                 {/* Center: status */}
-                <div style={{ minWidth: 100, flexShrink: 0 }}>
+                <div style={{ minWidth: 150, flexShrink: 0 }}>
                   <StatusBadge status={issue.status} />
+                  <DocumentBadge issue={issue} />
                   {issue.revokedAt && (
                     <p style={{ marginTop: 4, fontSize: "0.75rem", color: "var(--text-muted)" }}>
                       em {formatDateTime(issue.revokedAt)}
                     </p>
                   )}
-                  {issue.deleteAt && (
-                    <p style={{ marginTop: 4, fontSize: "0.75rem", color: "var(--text-muted)" }}>
-                      exclui em {formatDateOnly(issue.deleteAt)}
-                    </p>
-                  )}
                   {issue.hiddenAt && (
-                    <p style={{ marginTop: 4, fontSize: "0.75rem", color: "#fcd34d" }}>oculto</p>
+                    <p style={{ marginTop: 4, fontSize: "0.75rem", color: "#fcd34d" }}>Oculto</p>
                   )}
                 </div>
 
@@ -260,6 +260,10 @@ export function HistoryTable({
                   status={issue.status}
                   deleteAt={issue.deleteAt}
                   hiddenAt={issue.hiddenAt}
+                  documentAvailable={issue.documentAvailable}
+                  documentExpired={issue.documentExpired}
+                  nativeDownloadType={issue.nativeDownloadType}
+                  nativeDownloadLabel={issue.nativeDownloadLabel}
                   canManage={canManage}
                 />
               </div>
@@ -371,6 +375,44 @@ function StatusBadge({ status }: { status: CertificateStatus }) {
       Emitido
     </span>
   );
+}
+
+function DocumentBadge({ issue }: { issue: HistoryIssue }) {
+  if (issue.documentExpired) {
+    return (
+      <span style={badgeStyle("rgba(245,158,11,0.12)", "#fcd34d", "rgba(245,158,11,0.25)")}>
+        Documento expirado
+      </span>
+    );
+  }
+
+  if (issue.deleteAt) {
+    return (
+      <span style={badgeStyle("rgba(99,102,241,0.12)", "var(--brand-400)", "rgba(99,102,241,0.25)")}>
+        Expira em {formatDateOnly(issue.deleteAt)}
+      </span>
+    );
+  }
+
+  return (
+    <span style={badgeStyle("rgba(34,197,94,0.12)", "#86efac", "rgba(34,197,94,0.25)")}>
+      Documento disponivel
+    </span>
+  );
+}
+
+function badgeStyle(background: string, color: string, border: string): React.CSSProperties {
+  return {
+    display: "inline-flex",
+    marginTop: 5,
+    padding: "0.2rem 0.65rem",
+    borderRadius: 99,
+    fontSize: "0.75rem",
+    fontWeight: 700,
+    background,
+    color,
+    border: `1px solid ${border}`,
+  };
 }
 
 function formatDateTime(value: string | null) {

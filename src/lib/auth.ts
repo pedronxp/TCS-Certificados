@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SignJWT, jwtVerify } from "jose";
 import type { Role } from "@prisma/client";
+import { getRequiredProductionSecret } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
 
 const COOKIE_NAME = "tcs_session";
@@ -14,9 +15,7 @@ export type SessionUser = {
 };
 
 function secret() {
-  return new TextEncoder().encode(
-    process.env.SESSION_SECRET ?? "dev-secret-change-me",
-  );
+  return new TextEncoder().encode(getRequiredProductionSecret("SESSION_SECRET", "dev-secret-change-me"));
 }
 
 export async function createSession(user: SessionUser) {

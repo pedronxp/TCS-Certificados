@@ -1,10 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { TemplateVariable } from "@prisma/client";
-import { BadgeCheck, LoaderCircle } from "lucide-react";
-import { formatDateLongPtBr, isDateField, isLongDateField } from "@/lib/date-fields";
+import { BadgeCheck, Eye, LoaderCircle, X } from "lucide-react";
+import { formatDateLongPtBr, formatMonthYearPtBr, isDateField } from "@/lib/date-fields";
+import {
+  formatTemplateFieldValue,
+  getTemplateDocumentMode,
+  getTemplateFieldMetadata,
+  getTemplateVariableDescription,
+  getTemplateVariableLabel,
+  getTemplateVariablePlaceholder,
+  mirrorTemplateFieldValues,
+  onlyDigits,
+  validateTemplateFieldValue,
+  type TemplateDocumentMode,
+} from "@/lib/template-variable-fields";
 
 type FormMessage = {
   type: "error" | "info";
@@ -34,6 +46,9 @@ export function IssueForm({
   const [dateIsoValues, setDateIsoValues] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<FormMessage | null>(null);
   const [loading, setLoading] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId),
@@ -45,34 +60,44 @@ export function IssueForm({
     [currentUser, variables],
   );
   const effectiveValues = useMemo(
-    () => ({ ...values, ...lockedValues }),
-    [lockedValues, values],
+    () => mirrorTemplateFieldValues(variables, { ...values, ...lockedValues }),
+    [lockedValues, values, variables],
   );
   const requiredVariables = variables.filter((variable) => variable.required);
   const missingRequiredVariables = requiredVariables.filter(
     (variable) => !effectiveValues[variable.key]?.trim(),
   );
-  const invalidDocumentVariables = variables.filter((variable) => {
-    const state = getDocumentState(variable, effectiveValues[variable.key] ?? "");
-    return Boolean(state && state.digits.length > 0 && !state.complete);
-  });
+  const invalidFieldVariables = variables.filter((variable) =>
+    Boolean(validateTemplateFieldValue(variable, effectiveValues[variable.key] ?? "")),
+  );
   const canSubmit =
     Boolean(templateId) &&
     !loading &&
+    !previewLoading &&
     missingRequiredVariables.length === 0 &&
-    invalidDocumentVariables.length === 0;
+    invalidFieldVariables.length === 0;
+  const canPreview =
+    Boolean(templateId) &&
+    !loading &&
+    !previewLoading &&
+    missingRequiredVariables.length === 0 &&
+    invalidFieldVariables.length === 0;
+
+  useEffect(() => {
+    if (!previewUrl) return;
+    return () => window.URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
 
   function updateTemplate(nextTemplateId: string) {
     setTemplateId(nextTemplateId);
     setMessage(null);
+    setPreviewOpen(false);
   }
 
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
+  function validateReady() {
     if (!selectedTemplate) {
       setMessage({ type: "error", text: "Selecione um modelo para emitir o certificado." });
-      return;
+      return false;
     }
 
     if (missingRequiredVariables.length) {
@@ -80,20 +105,62 @@ export function IssueForm({
         type: "error",
         text: `Preencha: ${missingRequiredVariables.map(getFieldLabel).join(", ")}.`,
       });
-      return;
+      return false;
     }
 
-    if (invalidDocumentVariables.length) {
+    if (invalidFieldVariables.length) {
       setMessage({
         type: "error",
-        text: `Confira o documento: ${invalidDocumentVariables.map(getFieldLabel).join(", ")}.`,
+        text: `Confira: ${invalidFieldVariables.map(getFieldLabel).join(", ")}.`,
       });
-      return;
+      return false;
     }
 
-    const payloadValues = Object.fromEntries(
+    return true;
+  }
+
+  function buildPayloadValues() {
+    return Object.fromEntries(
       variables.map((variable) => [variable.key, effectiveValues[variable.key]?.trim() ?? ""]),
     );
+  }
+
+  async function openPreview() {
+    if (!validateReady()) return;
+
+    setPreviewLoading(true);
+    setMessage(null);
+
+    try {
+      const response = await fetch("/api/certificates/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ templateId, values: buildPayloadValues() }),
+      });
+
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        setMessage({
+          type: "error",
+          text: result?.error ?? "Não foi possível gerar a prévia.",
+        });
+        return;
+      }
+
+      const blob = await response.blob();
+      setPreviewUrl(window.URL.createObjectURL(blob));
+      setPreviewOpen(true);
+    } catch {
+      setMessage({ type: "error", text: "Não foi possível conectar ao servidor." });
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!validateReady()) return;
 
     setLoading(true);
     setMessage(null);
@@ -102,7 +169,7 @@ export function IssueForm({
       const response = await fetch("/api/certificates/issue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId, values: payloadValues }),
+        body: JSON.stringify({ templateId, values: buildPayloadValues() }),
       });
 
       if (!response.ok) {
@@ -144,12 +211,12 @@ export function IssueForm({
           </span>
           <span
             className={`rounded px-2.5 py-1.5 ${
-              missingRequiredVariables.length || invalidDocumentVariables.length
+              missingRequiredVariables.length || invalidFieldVariables.length
                 ? "bg-amber-50 text-amber-800"
                 : "bg-emerald-50 text-emerald-700"
             }`}
           >
-            {missingRequiredVariables.length || invalidDocumentVariables.length ? "Pendente" : "Pronto"}
+            {missingRequiredVariables.length || invalidFieldVariables.length ? "Pendente" : "Pronto"}
           </span>
         </div>
       </div>
@@ -192,14 +259,67 @@ export function IssueForm({
             ? `${missingRequiredVariables.length} campo(s) obrigatório(s) pendente(s)`
             : "Campos obrigatórios preenchidos"}
         </p>
-        <button
-          disabled={!canSubmit}
-          className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
-          {loading ? "Gerando" : "Gerar PDF e DOCX"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!canPreview}
+            onClick={openPreview}
+            className="inline-flex items-center gap-2 rounded-md border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {previewLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Eye className="size-4" />}
+            {previewLoading ? "Gerando prévia" : "Ver prévia"}
+          </button>
+          <button
+            disabled={!canSubmit}
+            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
+            {loading ? "Gerando" : "Gerar PDF e arquivo"}
+          </button>
+        </div>
       </div>
+
+      {previewOpen && previewUrl ? (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 p-4 backdrop-blur-sm">
+          <div className="mx-auto flex h-full max-w-6xl flex-col overflow-hidden rounded-lg bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Prévia do certificado</h2>
+                <p className="text-xs font-medium text-slate-500">Confira o layout antes de gerar os arquivos.</p>
+              </div>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setPreviewOpen(false)}
+                title="Fechar prévia"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <iframe
+              title="Prévia do certificado"
+              src={previewUrl}
+              className="min-h-0 flex-1 bg-slate-100"
+            />
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 px-4 py-3">
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Voltar e ajustar
+              </button>
+              <button
+                disabled={!canSubmit}
+                className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
+                {loading ? "Gerando" : "Gerar PDF e arquivo"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </form>
   );
 }
@@ -221,8 +341,10 @@ function CertificateField({
   onValueChange: (value: string) => void;
   onDateValueChange: (isoDate: string, formattedDate: string) => void;
 }) {
-  const documentState = getDocumentState(variable, value);
+  const documentMode = getTemplateDocumentMode(variable);
+  const validationError = validateTemplateFieldValue(variable, value);
   const label = getFieldLabel(variable);
+  const description = getTemplateVariableDescription(variable);
 
   return (
     <label className={`field ${className ?? ""}`}>
@@ -230,6 +352,7 @@ function CertificateField({
         {label}
         {variable.required ? <b className="ml-1 text-red-600">*</b> : null}
       </span>
+      <small className="text-xs font-medium leading-relaxed text-slate-500">{description}</small>
       {isDateField(variable) ? (
         <input
           type="date"
@@ -241,34 +364,45 @@ function CertificateField({
             onDateValueChange(iso, formatDateLongPtBr(iso));
           }}
         />
-      ) : documentState ? (
+      ) : isPeriodField(variable) ? (
+        <input
+          type="month"
+          required={variable.required}
+          value={dateValue}
+          disabled={disabled}
+          onChange={(event) => {
+            const iso = event.target.value;
+            onDateValueChange(iso, formatMonthYearPtBr(iso));
+          }}
+        />
+      ) : documentMode ? (
         <div className="space-y-1.5">
           <div className="relative">
             <input
               required={variable.required}
-              value={documentState.formatted}
+              value={formatTemplateFieldValue(variable, value)}
               disabled={disabled}
-              inputMode="numeric"
+              inputMode={isNumericDocumentMode(documentMode, value) ? "numeric" : "text"}
               autoComplete="off"
-              maxLength={documentState.maxLength}
-              aria-invalid={documentState.digits.length > 0 && !documentState.complete}
-              onChange={(event) => onValueChange(formatDocumentValue(variable, event.target.value))}
-              placeholder={documentState.placeholder}
+              maxLength={getDocumentMaxLength(documentMode)}
+              aria-invalid={Boolean(validationError)}
+              onChange={(event) => onValueChange(formatTemplateFieldValue(variable, event.target.value))}
+              placeholder={getTemplateVariablePlaceholder(variable)}
               className="with-field-affix"
             />
             <strong
               className={`pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-1 text-[0.68rem] font-bold uppercase ${
-                documentState.complete
+                value.trim() && !validationError
                   ? "bg-emerald-50 text-emerald-700"
                   : "bg-slate-100 text-slate-600"
               }`}
             >
-              {documentState.label}
+              {getDocumentModeLabel(documentMode, value)}
             </strong>
           </div>
-          {documentState.digits.length > 0 && !documentState.complete ? (
+          {validationError ? (
             <small className="font-medium text-amber-700">
-              Informe {documentState.expectedLength} dígitos para {documentState.label}.
+              {validationError}
             </small>
           ) : null}
         </div>
@@ -278,47 +412,23 @@ function CertificateField({
           value={value}
           disabled={disabled}
           onChange={(event) => onValueChange(event.target.value)}
-          placeholder={`{{${variable.key}}}`}
+          placeholder={getTemplateVariablePlaceholder(variable)}
         />
       )}
     </label>
   );
 }
 
-function normalizeKey(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-type DocumentMode = "CPF" | "CNPJ" | "CPF_CNPJ";
-
 function getFieldLabel(variable: { key: string; label: string }) {
-  if (isLongDateField(variable)) return "Data por Extenso";
-
-  const normalizedLabel = normalizeKey(variable.label);
-  if (normalizedLabel === "cpf") return "CPF";
-  if (normalizedLabel === "cnpj") return "CNPJ";
-
-  return variable.label;
+  return getTemplateVariableLabel(variable);
 }
 
 function isWideField(variable: { key: string; label: string }) {
-  const key = normalizeKey(variable.key);
-  const label = normalizeKey(variable.label);
+  return getTemplateFieldMetadata(variable).kind === "recipient_name";
+}
 
-  return (
-    key === "nome" ||
-    label === "nome" ||
-    key === "name" ||
-    label === "name" ||
-    key === "aluno" ||
-    label === "aluno"
-  );
+function isPeriodField(variable: { key: string; label: string }) {
+  return getTemplateFieldMetadata(variable).kind === "period";
 }
 
 function getLockedUserValues(
@@ -329,19 +439,13 @@ function getLockedUserValues(
 
   const locked: Record<string, string> = {};
   for (const variable of variables) {
-    const field = normalizeKey(`${variable.key}_${variable.label}`);
-    if (
-      field.includes("nome") ||
-      field.includes("name") ||
-      field.includes("participante") ||
-      field.includes("aluno") ||
-      field.includes("titular")
-    ) {
+    const kind = getTemplateFieldMetadata(variable).kind;
+    if (kind === "recipient_name") {
       locked[variable.key] = currentUser.name;
       continue;
     }
 
-    if (field.includes("email") || field.includes("e_mail")) {
+    if (kind === "email") {
       locked[variable.key] = currentUser.email;
     }
   }
@@ -349,81 +453,22 @@ function getLockedUserValues(
   return locked;
 }
 
-function getDocumentMode(variable: { key: string; label: string }): DocumentMode | null {
-  const key = normalizeKey(variable.key);
-  const label = normalizeKey(variable.label);
-  const combined = `${key}_${label}`;
-  const hasCpf = combined.includes("cpf");
-  const hasCnpj = combined.includes("cnpj");
-  const hasDocument = combined.includes("documento") || combined.includes("document");
-
-  if (hasCpf && hasCnpj) return "CPF_CNPJ";
-  if (hasCpf) return "CPF";
-  if (hasCnpj) return "CNPJ";
-  if (hasDocument) return "CPF_CNPJ";
-
-  return null;
+function isNumericDocumentMode(mode: TemplateDocumentMode, value: string) {
+  if (mode === "CPF" || mode === "CNPJ") return true;
+  if (mode === "CPF_CNPJ") return true;
+  return mode === "GENERIC" && Boolean(onlyDigits(value));
 }
 
-function getDocumentState(variable: { key: string; label: string }, value: string) {
-  const mode = getDocumentMode(variable);
-  if (!mode) return null;
-
-  const digits = onlyDigits(value);
-  const inferredType = inferDocumentType(mode, digits);
-  const expectedLength = inferredType === "CNPJ" ? 14 : 11;
-  const formatted = inferredType === "CNPJ" ? formatCnpj(digits) : formatCpf(digits);
-
-  return {
-    digits,
-    formatted,
-    label: inferredType,
-    complete: digits.length === expectedLength,
-    expectedLength,
-    maxLength: mode === "CPF" ? 14 : 18,
-    placeholder: mode === "CNPJ" ? "00.000.000/0000-00" : "000.000.000-00",
-  };
+function getDocumentMaxLength(mode: TemplateDocumentMode) {
+  if (mode === "CPF") return 14;
+  if (mode === "CNPJ" || mode === "CPF_CNPJ") return 18;
+  if (mode === "UF") return 2;
+  if (mode === "RG") return 24;
+  return 48;
 }
 
-function inferDocumentType(mode: DocumentMode, digits: string) {
-  if (mode === "CPF") return "CPF";
-  if (mode === "CNPJ") return "CNPJ";
-  return digits.length > 11 ? "CNPJ" : "CPF";
-}
-
-function formatDocumentValue(variable: { key: string; label: string }, value: string) {
-  const mode = getDocumentMode(variable) ?? "CPF_CNPJ";
-  const digits = onlyDigits(value).slice(0, mode === "CPF" ? 11 : 14);
-  const type = inferDocumentType(mode, digits);
-  return type === "CNPJ" ? formatCnpj(digits) : formatCpf(digits);
-}
-
-function onlyDigits(value: string) {
-  return value.replace(/\D/g, "");
-}
-
-function formatCpf(value: string) {
-  const digits = value.slice(0, 11);
-  const part1 = digits.slice(0, 3);
-  const part2 = digits.slice(3, 6);
-  const part3 = digits.slice(6, 9);
-  const part4 = digits.slice(9, 11);
-
-  return [part1, part2, part3].filter(Boolean).join(".") + (part4 ? `-${part4}` : "");
-}
-
-function formatCnpj(value: string) {
-  const digits = value.slice(0, 14);
-  const part1 = digits.slice(0, 2);
-  const part2 = digits.slice(2, 5);
-  const part3 = digits.slice(5, 8);
-  const part4 = digits.slice(8, 12);
-  const part5 = digits.slice(12, 14);
-
-  let formatted = part1;
-  if (part2) formatted += `.${part2}`;
-  if (part3) formatted += `.${part3}`;
-  if (part4) formatted += `/${part4}`;
-  if (part5) formatted += `-${part5}`;
-  return formatted;
+function getDocumentModeLabel(mode: TemplateDocumentMode, value: string) {
+  if (mode === "CPF_CNPJ") return onlyDigits(value).length > 11 ? "CNPJ" : "CPF";
+  if (mode === "GENERIC") return "DOC";
+  return mode;
 }

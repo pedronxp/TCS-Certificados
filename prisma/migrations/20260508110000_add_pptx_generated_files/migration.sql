@@ -1,0 +1,1 @@
+ALTER TYPE "GeneratedFileType" ADD VALUE IF NOT EXISTS 'PPTX';

@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
-import { TemplateEditor } from "@/components/templates/template-editor";
-import { templateLayoutSchema } from "@/lib/certificate-layout";
+import { EditorShell } from "@/components/editor/editor-shell";
+import { normalizeVisualDocxLayout, templateLayoutSchema } from "@/lib/certificate-layout";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
@@ -17,14 +17,17 @@ export default async function EditTemplatePage({
   if (!template) notFound();
 
   return (
-    <div>
-      <h1 className="mb-5 text-2xl font-bold">Editar modelo</h1>
-      <TemplateEditor
-        initial={{
-          ...template,
-          layout: templateLayoutSchema.parse(template.layout),
-        }}
-      />
-    </div>
+    <EditorShell
+      initial={{
+        id: template.id,
+        name: template.name,
+        description: template.description,
+        width: template.width,
+        height: template.height,
+        orientation: template.orientation,
+        background: template.background,
+        layout: normalizeVisualDocxLayout(templateLayoutSchema.parse(template.layout)),
+      }}
+    />
   );
 }
