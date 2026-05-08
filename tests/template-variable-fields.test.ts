@@ -16,6 +16,7 @@ test("describes imported certificate variables with semantic labels", () => {
   assert.equal(getTemplateVariableLabel({ key: "uf", label: "Uf" }), "Estado (UF)");
   assert.equal(getTemplateVariableLabel({ key: "horas", label: "Horas" }), "Carga horaria");
   assert.equal(getTemplateVariableLabel({ key: "data_extenso", label: "Data por Extenso" }), "Data por Extenso");
+  assert.equal(getTemplateVariableLabel({ key: "mes", label: "Mes" }), "Mes");
 });
 
 test("uses helpful placeholders for certificate creation fields", () => {
@@ -30,6 +31,10 @@ test("uses helpful placeholders for certificate creation fields", () => {
   assert.equal(
     getTemplateVariablePlaceholder({ key: "periodo", label: "Periodo" }),
     "setembro de 2019",
+  );
+  assert.equal(
+    getTemplateVariablePlaceholder({ key: "mes", label: "Mes" }),
+    "maio",
   );
 });
 
@@ -64,6 +69,14 @@ test("formats period fields as month and year", () => {
     formatTemplateFieldValue({ key: "periodo", label: "Periodo" }, "01/09/2019"),
     "setembro de 2019",
   );
+});
+
+test("formats month fields as month names", () => {
+  assert.equal(getTemplateFieldMetadata({ key: "mes", label: "MES" }).kind, "month");
+  assert.equal(formatTemplateFieldValue({ key: "mes", label: "MES" }, "5"), "maio");
+  assert.equal(formatTemplateFieldValue({ key: "mes", label: "MES" }, "05"), "maio");
+  assert.equal(formatTemplateFieldValue({ key: "mes", label: "MES" }, "2026-05"), "maio");
+  assert.equal(formatTemplateFieldValue({ key: "mes", label: "MES" }, "08/05/2026"), "maio");
 });
 
 test("mirrors equivalent fields such as nome/aluno and hora/horas", () => {

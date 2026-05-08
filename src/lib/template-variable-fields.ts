@@ -1,5 +1,6 @@
 import {
   DATE_FIELD_KEYS,
+  formatMonthNamePtBr,
   formatMonthYearPtBr,
   isDateField,
   isLongDateField,
@@ -24,6 +25,7 @@ export type TemplateFieldKind =
   | "city"
   | "date"
   | "long_date"
+  | "month"
   | "hours"
   | "period"
   | "course"
@@ -85,6 +87,7 @@ const FIELD_LABELS: Record<TemplateFieldKind, string> = {
   city: "Cidade",
   date: "Data",
   long_date: "Data por Extenso",
+  month: "Mes",
   hours: "Carga horaria",
   period: "Periodo do curso",
   course: "Curso",
@@ -106,6 +109,7 @@ const FIELD_PLACEHOLDERS: Record<TemplateFieldKind, string> = {
   city: "Cidade de realizacao, ex.: Cataguases",
   date: "Data do certificado",
   long_date: "29 de novembro de 2019",
+  month: "maio",
   hours: "16",
   period: "setembro de 2019",
   course: "Nome do curso",
@@ -127,6 +131,7 @@ const FIELD_DESCRIPTIONS: Record<TemplateFieldKind, string> = {
   city: "Cidade exibida no certificado; normalmente fica igual para todo o lote.",
   date: "Data exibida no certificado.",
   long_date: "Data por extenso exibida no certificado.",
+  month: "Mes exibido no certificado, por extenso.",
   hours: "Carga horaria exibida no certificado; normalmente fica igual para todo o lote.",
   period: "Periodo em que o curso ocorreu.",
   course: "Nome do curso exibido no certificado.",
@@ -156,6 +161,8 @@ const FIELD_LABEL_ALIASES: Record<string, string> = {
   id: FIELD_LABELS.rg,
   identidade: FIELD_LABELS.rg,
   instrutor: FIELD_LABELS.instructor,
+  mes: FIELD_LABELS.month,
+  month: FIELD_LABELS.month,
   name: FIELD_LABELS.recipient_name,
   nome: FIELD_LABELS.recipient_name,
   participante: FIELD_LABELS.recipient_name,
@@ -183,6 +190,7 @@ const KIND_ALIASES: Record<TemplateFieldKind, string[]> = {
     "data_por_extenso",
     "data_por_extensa",
   ],
+  month: ["mes", "month"],
   hours: ["hora", "horas", "carga_horaria"],
   period: ["periodo", "period"],
   course: ["curso", "course"],
@@ -206,6 +214,7 @@ const MIRRORED_FIELD_KINDS = new Set<TemplateFieldKind>([
   "recipient_name",
   "company",
   "city",
+  "month",
   "hours",
   "period",
   "course",
@@ -284,6 +293,10 @@ export function getTemplateFieldKind(variable: TemplateVariableIdentity): Templa
 
   if (hasAlias(key, label, "city") || hasAnyToken(allTokens, KIND_ALIASES.city)) {
     return "city";
+  }
+
+  if (hasAlias(key, label, "month") || hasAnyToken(allTokens, KIND_ALIASES.month)) {
+    return "month";
   }
 
   if (hasAlias(key, label, "hours") || hasAnyToken(allTokens, KIND_ALIASES.hours)) {
@@ -398,6 +411,7 @@ export function getTemplateFieldAliases(variable: TemplateVariableIdentity) {
 }
 
 export function formatTemplateFieldValue(variable: TemplateVariableIdentity, value: string) {
+  if (getTemplateFieldKind(variable) === "month") return formatMonthNamePtBr(value);
   if (getTemplateFieldKind(variable) === "period") return formatMonthYearPtBr(value);
 
   const mode = getTemplateDocumentMode(variable);
