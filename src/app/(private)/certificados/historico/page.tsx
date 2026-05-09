@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronLeft, ChevronRight, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Database, FileText, Hash, ListChecks, Search, X } from "lucide-react";
 import type { CertificateStatus, Prisma } from "@prisma/client";
 import { HistoryTable, type HistoryIssue } from "@/components/certificates/history-table";
 import { requireUser } from "@/lib/auth";
@@ -41,40 +41,48 @@ export default async function CertificateHistoryPage({
   const canManage = user.role === "ADMIN";
   const where = buildWhere(filters, { canManage, userId: user.id, now });
 
-  const rows = await prisma.certificateIssue.findMany({
-    where,
-    take: pageSize + 1,
-    skip: (filters.page - 1) * pageSize,
-    select: {
-      id: true,
-      verificationCode: true,
-      status: true,
-      issuedAt: true,
-      revokedAt: true,
-      values: true,
-      deleteAt: true,
-      hiddenAt: true,
-      recipient: {
-        select: {
-          name: true,
-          email: true,
-          document: true,
+  const [rows, totalResults, sequence, resettableCount] = await Promise.all([
+    prisma.certificateIssue.findMany({
+      where,
+      take: pageSize + 1,
+      skip: (filters.page - 1) * pageSize,
+      select: {
+        id: true,
+        verificationCode: true,
+        status: true,
+        issuedAt: true,
+        revokedAt: true,
+        values: true,
+        deleteAt: true,
+        hiddenAt: true,
+        recipient: {
+          select: {
+            name: true,
+            email: true,
+            document: true,
+          },
+        },
+        template: {
+          select: {
+            name: true,
+            layout: true,
+          },
+        },
+        issuedBy: {
+          select: {
+            name: true,
+          },
         },
       },
-      template: {
-        select: {
-          name: true,
-          layout: true,
-        },
-      },
-      issuedBy: {
-        select: {
-          name: true,
-        },
-      },
-    },
-    orderBy: [{ issuedAt: "desc" }, { id: "desc" }],
-  });
+      orderBy: [{ issuedAt: "desc" }, { id: "desc" }],
+    }),
+    prisma.certificateIssue.count({ where }),
+    prisma.certificateSequence.findUnique({
+      where: { id: "global" },
+      select: { value: true },
+    }),
+    canManage ? prisma.certificateIssue.count() : Promise.resolve(0),
+  ]);
 
   const hasNextPage = rows.length > pageSize;
   const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => {
@@ -101,74 +109,107 @@ export default async function CertificateHistoryPage({
       nativeDownloadLabel: nativeFileType,
     };
   });
+
   const start = issues.length ? (filters.page - 1) * pageSize + 1 : 0;
   const end = start + issues.length - 1;
+  const sequenceValue = sequence?.value ?? 0;
 
   return (
-    <div className="page-shell page-shell-wide">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Histórico</h1>
+    <div className="page-shell page-shell-wide history-page">
+      <section className="history-hero">
+        <div className="history-hero-copy">
+          <span className="history-eyebrow">Certificados</span>
+          <h1 className="page-title">Histórico de emissões</h1>
           <p className="page-subtitle">
-            Consulte certificados emitidos, filtre registros e baixe os arquivos gerados.
+            Consulte emissões, acompanhe documentos e administre a sequência de validação.
           </p>
         </div>
-        <div
-          style={{
-            background: "var(--surface-1)",
-            border: "1px solid var(--border-subtle)",
-            borderRadius: "var(--radius-md)",
-            padding: "0.75rem 1.25rem",
-            textAlign: "center",
-          }}
-        >
-          <p style={{ fontSize: "1.25rem", fontWeight: 800, color: "var(--text-primary)", lineHeight: 1 }}>
-            {issues.length}
-          </p>
-          <p style={{ fontSize: "0.8rem", color: "var(--text-muted)", marginTop: 2 }}>
-            {issues.length === 1 ? "registro nesta página" : "registros nesta página"}
-          </p>
-        </div>
-      </div>
+        <Link href="/certificados/emitir" className="btn btn-primary history-hero-button">
+          <FileText style={{ width: 16, height: 16 }} />
+          Nova emissão
+        </Link>
+      </section>
 
-      <form className="filter-bar mt-6" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
-        <label className="field" style={{ gridColumn: "span 5" }}>
-          <span className="field-label">Buscar</span>
-          <div style={{ position: "relative" }}>
-            <Search style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", width: 16, height: 16, pointerEvents: "none", color: "var(--text-muted)" }} />
+      <section className="history-metrics" aria-label="Resumo do histórico">
+        <MetricCard
+          icon={<ListChecks style={{ width: 18, height: 18 }} />}
+          label="Resultados"
+          value={String(totalResults)}
+          helper="com os filtros atuais"
+        />
+        <MetricCard
+          icon={<FileText style={{ width: 18, height: 18 }} />}
+          label="Nesta página"
+          value={String(issues.length)}
+          helper={`página ${filters.page}`}
+        />
+        <MetricCard
+          icon={<Hash style={{ width: 18, height: 18 }} />}
+          label="Contagem atual"
+          value={formatSequenceValue(sequenceValue)}
+          helper="último número reservado"
+        />
+        <MetricCard
+          icon={<Database style={{ width: 18, height: 18 }} />}
+          label="Próxima emissão"
+          value={formatSequenceValue(sequenceValue + 1)}
+          helper="após o próximo certificado"
+        />
+      </section>
+
+      <form className="history-filter">
+        <div className="history-filter-main">
+          <label className="field history-filter-search">
+            <span className="field-label">Buscar</span>
+            <div style={{ position: "relative" }}>
+              <Search style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", width: 16, height: 16, pointerEvents: "none", color: "var(--text-muted)" }} />
+              <input
+                name="q"
+                defaultValue={filters.q}
+                placeholder="Titular, código, modelo, e-mail ou documento"
+                className="pl-9"
+              />
+            </div>
+          </label>
+
+          <label className="field history-filter-company">
+            <span className="field-label">Empresa</span>
             <input
-              name="q"
-              defaultValue={filters.q}
-              placeholder="Titular, código, modelo, e-mail ou documento"
-              className="pl-9"
+              name="company"
+              defaultValue={filters.company}
+              placeholder="Nome da empresa"
             />
+          </label>
+
+          <label className="field history-filter-status">
+            <span className="field-label">Status</span>
+            <select name="status" defaultValue={filters.status ?? ""}>
+              <option value="">Todos</option>
+              <option value="ISSUED">Emitido</option>
+              <option value="REVOKED">Revogado</option>
+            </select>
+          </label>
+
+          <div className="history-filter-actions">
+            <button type="submit" className="btn btn-primary">
+              <Search style={{ width: 16, height: 16 }} />
+              Filtrar
+            </button>
+            <Link
+              href="/certificados/historico"
+              className="pagination-btn"
+              title="Limpar filtros"
+            >
+              <X style={{ width: 16, height: 16 }} />
+            </Link>
           </div>
-        </label>
-
-        <label className="field" style={{ gridColumn: "span 4" }}>
-          <span className="field-label">Empresa</span>
-          <input
-            name="company"
-            defaultValue={filters.company}
-            placeholder="Nome da empresa"
-          />
-        </label>
-
-        <label className="field" style={{ gridColumn: "span 3" }}>
-          <span className="field-label">Status</span>
-          <select name="status" defaultValue={filters.status ?? ""}>
-            <option value="">Todos</option>
-            <option value="ISSUED">Emitido</option>
-            <option value="REVOKED">Revogado</option>
-          </select>
-        </label>
+        </div>
 
         <details
-          className="filter-advanced"
+          className="filter-advanced history-filter-advanced"
           open={canManage ? filters.visibility !== "visible" || filters.availability !== "all" || Boolean(filters.from || filters.to) : filters.availability !== "all" || Boolean(filters.from || filters.to)}
-          style={{ gridColumn: "span 9" }}
         >
-          <summary>{canManage ? "Visibilidade, documentos e periodo" : "Documentos e periodo"}</summary>
+          <summary>{canManage ? "Visibilidade, documentos e período" : "Documentos e período"}</summary>
           <div className="filter-advanced-grid">
             {canManage ? (
               <label className="field">
@@ -185,7 +226,7 @@ export default async function CertificateHistoryPage({
               <span className="field-label">Documentos</span>
               <select name="availability" defaultValue={filters.availability}>
                 <option value="all">Todos</option>
-                <option value="available">Disponiveis</option>
+                <option value="available">Disponíveis</option>
                 <option value="scheduled">Programados</option>
                 <option value="expired">Expirados</option>
               </select>
@@ -202,54 +243,60 @@ export default async function CertificateHistoryPage({
             </label>
           </div>
         </details>
-
-        <div style={{ display: "flex", alignItems: "flex-end", gap: "0.5rem", gridColumn: "span 3" }}>
-          <button className="btn btn-primary" style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", height: 40 }}>
-            <Search style={{ width: 16, height: 16 }} />
-            Filtrar
-          </button>
-          <Link
-            href="/certificados/historico"
-            className="pagination-btn"
-            title="Limpar filtros"
-          >
-            <X style={{ width: 16, height: 16 }} />
-          </Link>
-        </div>
       </form>
 
-      <HistoryTable issues={issues} canManage={canManage} />
+      <HistoryTable
+        issues={issues}
+        canManage={canManage}
+        totalResults={totalResults}
+        resettableCount={resettableCount}
+        sequenceValue={sequenceValue}
+      />
 
-      <section
-        style={{
-          background: "var(--surface-1)",
-          border: "1px solid var(--border-subtle)",
-          borderTop: "none",
-          borderRadius: "0 0 var(--radius-lg) var(--radius-lg)",
-        }}
-      >
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", padding: "0.875rem 1.5rem", fontSize: "0.875rem", color: "var(--text-muted)" }}>
-          <p>Mostrando {start}-{end}</p>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <PaginationLink
-              href={historyHref(filters, filters.page - 1)}
-              disabled={filters.page <= 1}
-              label="Página anterior"
-              icon="previous"
-            />
-            <span style={{ minWidth: "6rem", textAlign: "center", fontWeight: 600, color: "var(--text-secondary)", fontSize: "0.875rem" }}>
-              Página {filters.page}
-            </span>
-            <PaginationLink
-              href={historyHref(filters, filters.page + 1)}
-              disabled={!hasNextPage}
-              label="Próxima página"
-              icon="next"
-            />
-          </div>
+      <section className="history-pagination">
+        <p>Mostrando {start}-{end} de {totalResults}</p>
+        <div className="history-pagination-controls">
+          <PaginationLink
+            href={historyHref(filters, filters.page - 1)}
+            disabled={filters.page <= 1}
+            label="Página anterior"
+            icon="previous"
+          />
+          <span className="history-page-counter">
+            Página {filters.page}
+          </span>
+          <PaginationLink
+            href={historyHref(filters, filters.page + 1)}
+            disabled={!hasNextPage}
+            label="Próxima página"
+            icon="next"
+          />
         </div>
       </section>
     </div>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  helper,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string;
+  helper: string;
+}) {
+  return (
+    <article className="history-metric">
+      <span className="history-metric-icon">{icon}</span>
+      <div>
+        <p>{label}</p>
+        <strong>{value}</strong>
+        <small>{helper}</small>
+      </div>
+    </article>
   );
 }
 
@@ -429,6 +476,10 @@ function historyHref(filters: ReturnType<typeof parseFilters>, page: number) {
 
   const query = params.toString();
   return query ? `/certificados/historico?${query}` : "/certificados/historico";
+}
+
+function formatSequenceValue(value: number) {
+  return String(Math.max(0, Math.trunc(value))).padStart(4, "0");
 }
 
 function PaginationLink({

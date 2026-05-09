@@ -177,6 +177,45 @@ export async function expireCertificateDocuments(ids: string[], now = new Date()
   return expireCertificateDocumentFiles(ids, { deleteAt: now });
 }
 
+export async function resetCertificateDatabase() {
+  const files = await prisma.generatedFile.findMany({
+    select: { storagePath: true },
+  });
+  const storagePaths = files
+    .map((file) => file.storagePath)
+    .filter(Boolean) as string[];
+
+  const result = await prisma.$transaction(async (tx) => {
+    const deletedFiles = await tx.generatedFile.deleteMany({});
+    const deletedIssues = await tx.certificateIssue.deleteMany({});
+    const deletedBatches = await tx.certificateBatch.deleteMany({});
+    const deletedRecipients = await tx.certificateRecipient.deleteMany({
+      where: { issues: { none: {} } },
+    });
+
+    await tx.certificateSequence.upsert({
+      where: { id: CERTIFICATE_SEQUENCE_ID },
+      update: { value: 0 },
+      create: { id: CERTIFICATE_SEQUENCE_ID, value: 0 },
+    });
+
+    return {
+      files: deletedFiles.count,
+      issues: deletedIssues.count,
+      batches: deletedBatches.count,
+      recipients: deletedRecipients.count,
+      sequenceValue: 0,
+    };
+  });
+
+  await removeStoredFiles(storagePaths);
+
+  return {
+    ...result,
+    storageFiles: storagePaths.length,
+  };
+}
+
 async function reserveNextVerificationCode(issuedAt: Date) {
   const sequence = await prisma.certificateSequence.upsert({
     where: { id: CERTIFICATE_SEQUENCE_ID },
