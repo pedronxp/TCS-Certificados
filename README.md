@@ -1,4 +1,4 @@
-# TCS Certificados
+# TCS Certificados, TODOS OS DIREITOS E CREDITOS SAO @TCS.SERVICOS 
 
 Sistema web para criar modelos de certificados, emitir certificados individuais ou em lote, gerar arquivos PDF/DOCX e validar autenticidade por código e QR Code.
 
