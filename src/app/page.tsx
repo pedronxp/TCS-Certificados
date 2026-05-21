@@ -19,7 +19,7 @@ export default async function Home() {
             </span>
             <span className="sidebar-logo-text">
               <span className="sidebar-logo-title">TCS Certificados</span>
-              <span className="sidebar-logo-subtitle">Emissao e validacao</span>
+              <span className="sidebar-logo-subtitle">Emissão e validação</span>
             </span>
           </Link>
           <Link href="/login" className="btn btn-ghost">
@@ -34,10 +34,10 @@ export default async function Home() {
               <ShieldCheck className="size-4" />
               Consulta oficial
             </span>
-            <h1>Valide certificados digitais com seguranca.</h1>
+            <h1>Valide certificados digitais com segurança.</h1>
             <p>
-              Consulte o codigo do certificado, confirme o documento do participante e visualize o
-              arquivo quando ele estiver disponivel para consulta publica.
+              Consulte o código do certificado, confirme o documento do participante e visualize o
+              arquivo quando ele estiver disponível para consulta pública.
             </p>
 
             <div className="public-home-actions">
@@ -55,11 +55,11 @@ export default async function Home() {
           <aside className="public-home-validation">
             <div className="public-home-card-header">
               <BadgeCheck className="size-5" />
-              <span>Consulta rapida</span>
+              <span>Consulta rápida</span>
             </div>
             <form action="/validar" method="get" className="public-home-form">
               <label className="field">
-                <span className="field-label">Codigo de validacao</span>
+                <span className="field-label">Código de validação</span>
                 <input
                   name="codigo"
                   type="text"

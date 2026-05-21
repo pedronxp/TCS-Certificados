@@ -12,6 +12,7 @@ export type HistoryIssue = {
   id: string;
   verificationCode: string;
   status: CertificateStatus;
+  isTest: boolean;
   issuedAt: string;
   revokedAt: string | null;
   deleteAt: string | null;
@@ -209,6 +210,7 @@ export function HistoryTable({
                 </div>
 
                 <div className="history-status-cell">
+                  {issue.isTest ? <span className="history-chip history-chip-test">Teste</span> : null}
                   <StatusBadge status={issue.status} />
                   <DocumentBadge issue={issue} />
                   {issue.revokedAt && (

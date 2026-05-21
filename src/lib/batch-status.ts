@@ -4,7 +4,7 @@ export const STALE_BATCH_TIMEOUT_MS = 10 * 60 * 1000;
 
 export const BATCH_STATUS_LABELS: Record<CertificateBatchStatus, string> = {
   RUNNING: "Gerando",
-  COMPLETED: "Concluido",
+  COMPLETED: "Concluído",
   FAILED: "Falha",
 };
 

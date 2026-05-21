@@ -21,8 +21,8 @@ export default async function IssueCertificatePage({
   });
 
   return (
-    <div className="page-shell page-shell-narrow">
-      <div className="page-header">
+    <div className="page-shell issue-page-shell" style={{ maxWidth: "68rem", margin: "0 auto" }}>
+      <div className="page-header issue-page-header" style={{ alignItems: "center" }}>
         <div>
           <h1 className="page-title">Emitir certificado</h1>
           <p className="page-subtitle">Selecione o modelo e preencha os campos obrigatórios.</p>

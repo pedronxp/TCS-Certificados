@@ -12,6 +12,7 @@ import { Plus } from "lucide-react";
 import { nanoid } from "nanoid";
 import { useEditorStore } from "@/stores/editor-store";
 import { normalizeVariableKey } from "@/lib/certificate-layout";
+import { getTemplateVariableDefaultRequired } from "@/lib/template-variable-fields";
 import type { TemplateElement } from "@/lib/certificate-layout";
 
 export function VariablePanel() {
@@ -39,7 +40,7 @@ export function VariablePanel() {
       content: `{{${key}}}`,
       variableKey: key,
       variableLabel: newLabel.trim(),
-      variableRequired: true,
+      variableRequired: getTemplateVariableDefaultRequired({ key, label: newLabel }),
       x: 200,
       y: 200,
       pageIndex: activePageIndex,

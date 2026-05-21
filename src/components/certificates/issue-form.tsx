@@ -1,17 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { TemplateVariable } from "@prisma/client";
 import { BadgeCheck, Eye, LoaderCircle, X } from "lucide-react";
 import { formatDateLongPtBr, formatMonthYearPtBr, isDateField } from "@/lib/date-fields";
 import {
+  applyCalculatedTemplateValues,
   formatTemplateFieldValue,
   getTemplateDocumentMode,
   getTemplateFieldMetadata,
   getTemplateVariableDescription,
   getTemplateVariableLabel,
   getTemplateVariablePlaceholder,
+  isTemplateCalculatedField,
+  isTemplateVariableRequired,
   mirrorTemplateFieldValues,
   onlyDigits,
   validateTemplateFieldValue,
@@ -49,21 +52,31 @@ export function IssueForm({
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewUrl, setPreviewUrl] = useState("");
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [documentFieldEnabled, setDocumentFieldEnabled] = useState<Record<string, boolean>>({});
+  const [isTest, setIsTest] = useState(false);
+  const [showTestInfo, setShowTestInfo] = useState(false);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId),
     [templateId, templates],
   );
-  const variables = useMemo(() => selectedTemplate?.variables ?? [], [selectedTemplate]);
+  const templateVariables = useMemo(() => selectedTemplate?.variables ?? [], [selectedTemplate]);
+  const variables = useMemo(
+    () => templateVariables.filter((variable) => !isTemplateCalculatedField(variable)),
+    [templateVariables],
+  );
   const lockedValues = useMemo(
-    () => getLockedUserValues(variables, currentUser),
-    [currentUser, variables],
+    () => getLockedUserValues(templateVariables, currentUser),
+    [currentUser, templateVariables],
   );
   const effectiveValues = useMemo(
-    () => mirrorTemplateFieldValues(variables, { ...values, ...lockedValues }),
-    [lockedValues, values, variables],
+    () => applyCalculatedTemplateValues(
+      templateVariables,
+      mirrorTemplateFieldValues(templateVariables, { ...values, ...lockedValues }),
+    ),
+    [lockedValues, values, templateVariables],
   );
-  const requiredVariables = variables.filter((variable) => variable.required);
+  const requiredVariables = variables.filter(isTemplateVariableRequired);
   const missingRequiredVariables = requiredVariables.filter(
     (variable) => !effectiveValues[variable.key]?.trim(),
   );
@@ -92,6 +105,7 @@ export function IssueForm({
     setTemplateId(nextTemplateId);
     setMessage(null);
     setPreviewOpen(false);
+    setDocumentFieldEnabled({});
   }
 
   function validateReady() {
@@ -121,7 +135,7 @@ export function IssueForm({
 
   function buildPayloadValues() {
     return Object.fromEntries(
-      variables.map((variable) => [variable.key, effectiveValues[variable.key]?.trim() ?? ""]),
+      templateVariables.map((variable) => [variable.key, effectiveValues[variable.key]?.trim() ?? ""]),
     );
   }
 
@@ -169,7 +183,7 @@ export function IssueForm({
       const response = await fetch("/api/certificates/issue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId, values: buildPayloadValues() }),
+        body: JSON.stringify({ templateId, values: buildPayloadValues(), isTest }),
       });
 
       if (!response.ok) {
@@ -181,7 +195,8 @@ export function IssueForm({
         return;
       }
 
-      router.push("/certificados/historico");
+      const issue = await response.json() as { id?: string };
+      router.push(issue.id ? `/certificados/concluido?issueId=${issue.id}` : "/certificados/historico");
       router.refresh();
     } catch {
       setMessage({ type: "error", text: "Não foi possível conectar ao servidor." });
@@ -191,10 +206,20 @@ export function IssueForm({
   }
 
   return (
-    <form onSubmit={submit} className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="grid gap-4 border-b border-slate-100 pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-        <label className="field min-w-0">
-          <span>Modelo</span>
+    <form onSubmit={submit} className="dark-card-flat issue-form" style={{ padding: "1.35rem" }}>
+      <div
+        className="issue-form-header"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "minmax(0, 1fr) auto",
+          alignItems: "end",
+          gap: "1rem",
+          borderBottom: "1px solid var(--border-subtle)",
+          paddingBottom: "1.15rem",
+        }}
+      >
+        <label className="field issue-template-field">
+          <span className="field-label">Modelo</span>
           <select value={templateId} onChange={(event) => updateTemplate(event.target.value)} required>
             {templates.map((template) => (
               <option key={template.id} value={template.id}>
@@ -204,74 +229,150 @@ export function IssueForm({
           </select>
         </label>
 
-        <div className="flex flex-wrap gap-2 text-xs font-semibold text-slate-600 lg:justify-end">
-          <span className="rounded bg-slate-100 px-2.5 py-1.5">{variables.length} campos</span>
-          <span className="rounded bg-slate-100 px-2.5 py-1.5">
+        <div className="issue-status-list" style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "0.5rem" }}>
+          <span className="issue-status-chip" style={issueStatusChipStyle()}>{variables.length} campos</span>
+          <span className="issue-status-chip" style={issueStatusChipStyle()}>
             {requiredVariables.length} obrigatórios
           </span>
           <span
-            className={`rounded px-2.5 py-1.5 ${
+            className={`issue-status-chip ${
               missingRequiredVariables.length || invalidFieldVariables.length
-                ? "bg-amber-50 text-amber-800"
-                : "bg-emerald-50 text-emerald-700"
+                ? "issue-status-chip-warning"
+                : "issue-status-chip-success"
             }`}
+            style={issueStatusChipStyle(
+              missingRequiredVariables.length || invalidFieldVariables.length ? "warning" : "success",
+            )}
           >
             {missingRequiredVariables.length || invalidFieldVariables.length ? "Pendente" : "Pronto"}
           </span>
         </div>
       </div>
 
-      <div className="mt-6 grid gap-4 md:grid-cols-2 xl:gap-5">
-        {variables.map((variable) => (
-          <CertificateField
-            key={variable.id}
-            className={isWideField(variable) ? "md:col-span-2" : undefined}
-            variable={variable}
-            value={effectiveValues[variable.key] ?? ""}
-            dateValue={dateIsoValues[variable.key] ?? ""}
-            disabled={Object.hasOwn(lockedValues, variable.key)}
-            onValueChange={(nextValue) =>
-              setValues((current) => ({ ...current, [variable.key]: nextValue }))
-            }
-            onDateValueChange={(iso, formatted) => {
+      <div
+        className="issue-fields-grid"
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: "1.15rem 1.25rem",
+          paddingTop: "1.35rem",
+        }}
+      >
+        {variables.map((variable) => {
+          const hasDocumentChoice = shouldUseDocumentChoice(variable, templateVariables);
+          const documentEnabled = documentFieldEnabled[variable.key] ?? true;
+          const commonProps = {
+            className: isWideField(variable) ? "issue-field-wide" : undefined,
+            variable,
+            value: effectiveValues[variable.key] ?? "",
+            dateValue: dateIsoValues[variable.key] ?? "",
+            disabled: Object.hasOwn(lockedValues, variable.key),
+            onValueChange: (nextValue: string) =>
+              setValues((current) => ({ ...current, [variable.key]: nextValue })),
+            onDateValueChange: (iso: string, formatted: string) => {
               setDateIsoValues((current) => ({ ...current, [variable.key]: iso }));
               setValues((current) => ({ ...current, [variable.key]: formatted }));
-            }}
-          />
-        ))}
+            },
+          };
+
+          if (!hasDocumentChoice) {
+            return <CertificateField key={variable.id} {...commonProps} />;
+          }
+
+          return (
+            <DocumentChoiceField
+              key={variable.id}
+              enabled={documentEnabled}
+              onEnabledChange={(enabled) => {
+                setDocumentFieldEnabled((current) => ({ ...current, [variable.key]: enabled }));
+                if (!enabled) {
+                  setValues((current) => ({ ...current, [variable.key]: "" }));
+                }
+              }}
+            >
+              {documentEnabled ? <CertificateField {...commonProps} /> : null}
+            </DocumentChoiceField>
+          );
+        })}
       </div>
 
       {message ? (
         <p
-          className={`mt-5 rounded-md px-3 py-2 text-sm font-medium ${
+          className={`issue-message ${
             message.type === "error"
-              ? "bg-red-50 text-red-700"
-              : "bg-slate-100 text-slate-700"
+              ? "issue-message-error"
+              : "issue-message-info"
           }`}
         >
           {message.text}
         </p>
       ) : null}
 
-      <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-md bg-slate-50 px-4 py-3">
-        <p className="text-sm font-medium text-slate-500">
+      <div
+        className="issue-form-footer"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "1rem",
+          marginTop: "1.35rem",
+          border: "1px solid var(--border-subtle)",
+          borderRadius: 8,
+          background: "var(--surface-2)",
+          padding: "0.85rem",
+        }}
+      >
+        <div className="issue-footer-info" style={{ display: "flex", flex: "1 1 auto", flexWrap: "wrap", alignItems: "center", gap: "0.8rem 1rem" }}>
+        <p style={{ color: "var(--text-muted)", fontSize: "0.875rem", fontWeight: 800 }}>
           {missingRequiredVariables.length
             ? `${missingRequiredVariables.length} campo(s) obrigatório(s) pendente(s)`
             : "Campos obrigatórios preenchidos"}
         </p>
-        <div className="flex flex-wrap items-center gap-2">
+        <label
+          className="issue-test-toggle"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.65rem",
+            border: "1px solid var(--border-subtle)",
+            borderRadius: 8,
+            background: "var(--surface-1)",
+            padding: "0.55rem 0.7rem",
+            color: "var(--text-secondary)",
+          }}
+        >
+          <input
+            type="checkbox"
+            style={{ width: 16, height: 16, flex: "0 0 auto", accentColor: "var(--brand-600)" }}
+            checked={isTest}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setIsTest(checked);
+              if (checked) setShowTestInfo(true);
+            }}
+          />
+          <span style={{ display: "grid", gap: "0.05rem", textAlign: "left" }}>
+            <strong>Teste</strong>
+          <small style={{ color: "var(--text-muted)", fontSize: "0.72rem", fontWeight: 700 }}>
+            não consome numeração oficial
+          </small>
+          </span>
+        </label>
+        </div>
+        <div className="issue-actions" style={{ display: "flex", flexWrap: "wrap", justifyContent: "flex-end", gap: "0.6rem" }}>
           <button
             type="button"
             disabled={!canPreview}
             onClick={openPreview}
-            className="inline-flex items-center gap-2 rounded-md border border-teal-700 bg-white px-4 py-2 text-sm font-semibold text-teal-800 hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className="btn btn-ghost issue-action-button"
           >
             {previewLoading ? <LoaderCircle className="size-4 animate-spin" /> : <Eye className="size-4" />}
             {previewLoading ? "Gerando prévia" : "Ver prévia"}
           </button>
           <button
             disabled={!canSubmit}
-            className="inline-flex items-center gap-2 rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+            className="btn btn-primary issue-action-button"
           >
             {loading ? <LoaderCircle className="size-4 animate-spin" /> : <BadgeCheck className="size-4" />}
             {loading ? "Gerando" : "Gerar PDF e arquivo"}
@@ -320,7 +421,59 @@ export function IssueForm({
           </div>
         </div>
       ) : null}
+      {showTestInfo ? <TestModeDialog onClose={() => setShowTestInfo(false)} /> : null}
     </form>
+  );
+}
+
+function issueStatusChipStyle(tone?: "warning" | "success") {
+  const base = {
+    display: "inline-flex",
+    minHeight: "1.8rem",
+    alignItems: "center",
+    border: "1px solid var(--border-subtle)",
+    borderRadius: 8,
+    background: "var(--surface-2)",
+    color: "var(--text-secondary)",
+    padding: "0.35rem 0.65rem",
+    fontSize: "0.75rem",
+    fontWeight: 800,
+  } as const;
+
+  if (tone === "warning") {
+    return {
+      ...base,
+      borderColor: "color-mix(in oklch, var(--warning) 38%, transparent)",
+      background: "var(--warning-soft)",
+      color: "color-mix(in oklch, var(--warning) 82%, var(--text-primary))",
+    } as const;
+  }
+
+  if (tone === "success") {
+    return {
+      ...base,
+      borderColor: "color-mix(in oklch, var(--success) 38%, transparent)",
+      background: "var(--success-soft)",
+      color: "color-mix(in oklch, var(--success) 78%, var(--text-primary))",
+    } as const;
+  }
+
+  return base;
+}
+
+function TestModeDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+        <h2 className="text-base font-bold text-slate-900">Modo teste ativado</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          A prévia não consome numeração. Ao gerar com a caixa Teste marcada, o sistema cria os arquivos para conferência com código TESTE e não avança a sequência oficial TCS-BR.
+        </p>
+        <button type="button" onClick={onClose} className="mt-4 w-full rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800">
+          Entendi
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -345,18 +498,19 @@ function CertificateField({
   const validationError = validateTemplateFieldValue(variable, value);
   const label = getFieldLabel(variable);
   const description = getTemplateVariableDescription(variable);
+  const required = isTemplateVariableRequired(variable);
 
   return (
-    <label className={`field ${className ?? ""}`}>
+    <label className={`field ${className ?? ""}`} style={className === "issue-field-wide" ? { gridColumn: "1 / -1" } : undefined}>
       <span>
         {label}
-        {variable.required ? <b className="ml-1 text-red-600">*</b> : null}
+        {required ? <b className="ml-1 text-red-600">*</b> : null}
       </span>
       <small className="text-xs font-medium leading-relaxed text-slate-500">{description}</small>
       {isDateField(variable) ? (
         <input
           type="date"
-          required={variable.required}
+          required={required}
           value={dateValue}
           disabled={disabled}
           onChange={(event) => {
@@ -367,7 +521,7 @@ function CertificateField({
       ) : isPeriodField(variable) ? (
         <input
           type="month"
-          required={variable.required}
+          required={required}
           value={dateValue}
           disabled={disabled}
           onChange={(event) => {
@@ -379,7 +533,7 @@ function CertificateField({
         <div className="space-y-1.5">
           <div className="relative">
             <input
-              required={variable.required}
+              required={required}
               value={formatTemplateFieldValue(variable, value)}
               disabled={disabled}
               inputMode={isNumericDocumentMode(documentMode, value) ? "numeric" : "text"}
@@ -408,7 +562,7 @@ function CertificateField({
         </div>
       ) : (
         <input
-          required={variable.required}
+          required={required}
           value={value}
           disabled={disabled}
           onChange={(event) => onValueChange(event.target.value)}
@@ -416,6 +570,46 @@ function CertificateField({
         />
       )}
     </label>
+  );
+}
+
+function DocumentChoiceField({
+  enabled,
+  onEnabledChange,
+  children,
+}: {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="field">
+      <span>CPF no certificado</span>
+      <small className="text-xs font-medium leading-relaxed text-slate-500">
+        Escolha se o texto do certificado deve exibir CPF/documento do participante.
+      </small>
+      <div className="grid grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
+        <button
+          type="button"
+          onClick={() => onEnabledChange(true)}
+          className={`rounded px-3 py-2 text-sm font-semibold transition ${
+            enabled ? "bg-white text-teal-800 shadow-sm" : "text-slate-600 hover:bg-white/70"
+          }`}
+        >
+          Com CPF
+        </button>
+        <button
+          type="button"
+          onClick={() => onEnabledChange(false)}
+          className={`rounded px-3 py-2 text-sm font-semibold transition ${
+            !enabled ? "bg-white text-teal-800 shadow-sm" : "text-slate-600 hover:bg-white/70"
+          }`}
+        >
+          Sem CPF
+        </button>
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -429,6 +623,22 @@ function isWideField(variable: { key: string; label: string }) {
 
 function isPeriodField(variable: { key: string; label: string }) {
   return getTemplateFieldMetadata(variable).kind === "period";
+}
+
+function shouldUseDocumentChoice(
+  variable: { key: string; label: string },
+  variables: Array<{ key: string; label: string }>,
+) {
+  const kind = getTemplateFieldMetadata(variable).kind;
+  const hasCalculatedDocumentText = variables.some(
+    (item) => getTemplateFieldMetadata(item).kind === "document_phrase",
+  );
+
+  return hasCalculatedDocumentText && (
+    kind === "cpf" ||
+    kind === "cpf_cnpj" ||
+    kind === "generic_document"
+  );
 }
 
 function getLockedUserValues(

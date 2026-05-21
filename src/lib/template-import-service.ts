@@ -10,6 +10,7 @@ import {
 import { buildDocxPreview } from "@/lib/docx-preview-service";
 import { buildPptxPreview } from "@/lib/pptx-preview-service";
 import { prisma } from "@/lib/prisma";
+import { getTemplateVariableDefaultRequired } from "@/lib/template-variable-fields";
 
 type ImportedTemplateDraft = {
   name: string;
@@ -169,7 +170,11 @@ async function buildImportedTemplateDraft(input: ImportTemplateInput): Promise<I
       baseDocumentMode: "native",
     });
     const variableDefinitions = mergeVariableDefinitions(
-      preview.variables.map((key) => ({ key, label: labelFromKey(key), required: true })),
+      preview.variables.map((key) => ({
+        key,
+        label: labelFromKey(key),
+        required: getTemplateVariableDefaultRequired({ key }),
+      })),
       input.variableDefinitions,
     );
 
@@ -216,7 +221,9 @@ export function normalizeImportVariableDefinitions(value: unknown): TemplateVari
       return {
         key,
         label,
-        required: typeof raw.required === "boolean" ? raw.required : true,
+        required: typeof raw.required === "boolean"
+          ? raw.required
+          : getTemplateVariableDefaultRequired({ key, label }),
       };
     })
     .filter((item): item is TemplateVariableDefinition => Boolean(item));
@@ -230,7 +237,7 @@ export function normalizeImportVariableLabels(value: unknown): TemplateVariableD
       const key = normalizeVariableKey(rawKey);
       const label = cleanText(rawLabel) || key;
       if (!key || !label) return null;
-      return { key, label, required: true };
+      return { key, label, required: getTemplateVariableDefaultRequired({ key, label }) };
     })
     .filter((item): item is TemplateVariableDefinition => Boolean(item));
 }

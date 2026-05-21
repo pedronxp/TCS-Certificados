@@ -3,6 +3,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, Upload } from "lucide-react";
 import { notifyBatchJobStarted } from "@/components/certificates/batch-progress-toast";
+import { buildBatchResultMessage } from "@/lib/batch-result-message";
 import { formatDateLongPtBr, formatMonthYearPtBr, isDateField } from "@/lib/date-fields";
 import {
   formatTemplateFieldValue,
@@ -15,6 +16,7 @@ import {
   isTemplateBatchPersonField,
   isTemplateBatchSharedField,
   isTemplateRecipientField,
+  isTemplateVariableRequired,
   validateTemplateFieldValue,
 } from "@/lib/template-variable-fields";
 
@@ -52,7 +54,7 @@ type PreviewRow = {
   errors: string[];
 };
 
-const steps = ["Dados", "Pessoas", "Revisao"];
+const steps = ["Dados", "Pessoas", "Revisão"];
 
 export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   const [step, setStep] = useState(0);
@@ -64,15 +66,28 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   const [namesText, setNamesText] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [includeDocumentField, setIncludeDocumentField] = useState(true);
+  const [isTest, setIsTest] = useState(false);
+  const [showTestInfo, setShowTestInfo] = useState(false);
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId),
     [templateId, templates],
   );
   const variables = useMemo(() => selectedTemplate?.variables ?? [], [selectedTemplate]);
-  const personVariables = useMemo(
+  const allPersonVariables = useMemo(
     () => dedupeTemplateFieldVariables(variables.filter(isTemplateBatchPersonField)),
     [variables],
+  );
+  const hasDocumentChoice = useMemo(
+    () => allPersonVariables.some((variable) => shouldUseDocumentChoice(variable, variables)),
+    [allPersonVariables, variables],
+  );
+  const personVariables = useMemo(
+    () => includeDocumentField
+      ? allPersonVariables
+      : allPersonVariables.filter((variable) => !shouldUseDocumentChoice(variable, variables)),
+    [allPersonVariables, includeDocumentField, variables],
   );
   const recipientVariable = personVariables.find(isTemplateRecipientField) ?? null;
   const sharedVariables = useMemo(
@@ -105,7 +120,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     [people, personVariables, company, issuedDate, sharedValues, sharedVariables],
   );
   const sharedMissing = sharedVariables.filter(
-    (variable) => variable.required && !sharedValues[variable.key]?.trim(),
+    (variable) => isTemplateVariableRequired(variable) && !sharedValues[variable.key]?.trim(),
   );
   const batchBlockReason = getBatchBlockReason(recipientVariable, personVariables);
   const validRows = preview.filter((row) => !row.errors.length);
@@ -126,6 +141,8 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     setNamesText("");
     setSharedValues({});
     setSharedMonthValues({});
+    setIncludeDocumentField(true);
+    setIsTest(false);
   }
 
   async function submit() {
@@ -139,6 +156,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     form.set("recipientKey", recipientVariable?.key ?? "nome");
     form.set("personKeys", JSON.stringify(personVariables.map((variable) => variable.key)));
     form.set("peopleRows", JSON.stringify(preview.map((row) => row.values)));
+    form.set("isTest", String(isTest));
 
     for (const variable of variables) {
       if (isCompanyVariable(variable)) {
@@ -166,48 +184,53 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     }
 
     notifyBatchJobStarted(result.jobId);
-    setMessage(buildBatchMessage(result, validRows.length));
+    setMessage(buildBatchResultMessage(result, validRows.length));
     setStep(0);
     setNamesText("");
   }
 
   return (
-    <section className="dark-card-flat" style={{ padding: "1.25rem" }}>
-      <div style={{ display: "grid", gap: "0.5rem", gridTemplateColumns: "repeat(3, 1fr)" }}>
+    <section className="dark-card-flat batch-form-card" style={{ padding: "1.25rem" }}>
+      <div
+        className="batch-step-tabs"
+        style={{ display: "grid", gap: "0.6rem", gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}
+      >
         {steps.map((label, index) => (
           <button
             key={label}
             type="button"
             onClick={() => setStep(index)}
+            className={`batch-step-tab${step === index ? " batch-step-tab-active" : ""}`}
             style={{
               display: "flex",
               alignItems: "center",
               gap: "0.5rem",
-              borderRadius: "var(--radius-md)",
+              minHeight: "2.45rem",
               border: `1px solid ${step === index ? "var(--brand-500)" : "var(--border-muted)"}`,
+              borderRadius: "var(--radius-md)",
               background: step === index ? "var(--brand-50)" : "var(--surface-2)",
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontSize: "0.875rem",
-              fontWeight: 600,
               color: step === index ? "var(--brand-700)" : "var(--text-secondary)",
               cursor: "pointer",
-              transition: "all 150ms",
               fontFamily: "inherit",
+              fontSize: "0.875rem",
+              fontWeight: 700,
+              padding: "0.5rem 0.75rem",
+              textAlign: "left",
             }}
           >
             <span
+              className="batch-step-number"
               style={{
                 display: "grid",
                 width: 22,
                 height: 22,
                 placeItems: "center",
+                flexShrink: 0,
                 borderRadius: "50%",
                 background: step === index ? "var(--brand-600)" : "var(--surface-3)",
                 color: step === index ? "#fff" : "var(--text-muted)",
                 fontSize: "0.75rem",
-                fontWeight: 700,
-                flexShrink: 0,
+                fontWeight: 800,
               }}
             >
               {index + 1}
@@ -220,8 +243,16 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
       <div style={{ marginTop: "1.5rem" }}>
         {step === 0 && (
           <div>
-            <div style={{ display: "grid", gap: "1rem", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-              <label className="field">
+            <div
+              className="batch-data-grid"
+              style={{
+                display: "grid",
+                gap: "1rem",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                alignItems: "end",
+              }}
+            >
+              <label className="field batch-field-model">
                 <span className="field-label">Modelo</span>
                 <select value={templateId} required onChange={(event) => updateTemplate(event.target.value)}>
                   {templates.map((template) => (
@@ -231,14 +262,67 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
               </label>
               <label className="field">
                 <span className="field-label">Empresa</span>
-                <small style={hintStyle}>Empresa vinculada ao lote; este valor sera repetido em todos os certificados.</small>
+                <small style={hintStyle}>Empresa vinculada ao lote; este valor será repetido em todos os certificados.</small>
                 <input value={company} required onChange={(event) => setCompany(event.target.value)} />
               </label>
               <label className="field">
                 <span className="field-label">Data</span>
-                <small style={hintStyle}>Data exibida no certificado; o sistema gravara o texto por extenso.</small>
+                <small style={hintStyle}>Data exibida no certificado; o sistema gravará o texto por extenso.</small>
                 <input type="date" value={issuedDate} required onChange={(event) => setIssuedDate(event.target.value)} />
               </label>
+              <div
+                className="batch-test-field"
+                style={{
+                  display: "grid",
+                  gap: "0.45rem",
+                  minHeight: "5.25rem",
+                  alignContent: "end",
+                }}
+              >
+                <span className="field-label">Modo da emissão</span>
+                <label
+                  className="batch-test-toggle"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.65rem",
+                    minHeight: "2.5rem",
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 8,
+                    background: "var(--surface-2)",
+                    padding: "0.6rem 0.75rem",
+                    color: "var(--text-secondary)",
+                    fontSize: "0.875rem",
+                    fontWeight: 800,
+                    lineHeight: 1.25,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    className="batch-test-checkbox"
+                    style={{
+                      width: 16,
+                      height: 16,
+                      minHeight: 16,
+                      padding: 0,
+                      flex: "0 0 auto",
+                      accentColor: "var(--brand-600)",
+                    }}
+                    checked={isTest}
+                    onChange={(event) => {
+                      const checked = event.target.checked;
+                      setIsTest(checked);
+                      if (checked) setShowTestInfo(true);
+                    }}
+                  />
+                  <span style={{ display: "grid", gap: "0.1rem" }}>
+                    <span>Teste</span>
+                    <span style={{ color: "var(--text-muted)", fontSize: "0.75rem", fontWeight: 600 }}>
+                      Não avança a numeração oficial
+                    </span>
+                  </span>
+                </label>
+              </div>
               {sharedVariables.map((variable) => (
                 <label key={variable.id} className="field">
                   <span className="field-label">{getFieldLabel(variable)}</span>
@@ -247,7 +331,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                     <input
                       type="month"
                       value={sharedMonthValues[variable.key] ?? ""}
-                      required={variable.required}
+                      required={isTemplateVariableRequired(variable)}
                       placeholder={getTemplateVariablePlaceholder(variable)}
                       onChange={(event) => {
                         const iso = event.target.value;
@@ -264,7 +348,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                   ) : (
                     <input
                       value={sharedValues[variable.key] ?? ""}
-                      required={variable.required}
+                      required={isTemplateVariableRequired(variable)}
                       placeholder={getTemplateVariablePlaceholder(variable)}
                       onChange={(event) =>
                         setSharedValues((current) => ({
@@ -285,21 +369,29 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
         )}
 
         {step === 1 && (
-          <label className="field">
-            <span className="field-label">Pessoas ({getPersonInputLabel(personVariables)})</span>
-            <small style={hintStyle}>
-              Informe uma pessoa por linha, separando os campos por ponto e virgula na ordem indicada.
-            </small>
-            <textarea
-              value={namesText}
-              onChange={(event) => setNamesText(event.target.value)}
-              rows={10}
-              placeholder={buildPeoplePlaceholder(personVariables)}
-            />
-            <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
-              {people.length} pessoas informadas
-            </span>
-          </label>
+          <div style={{ display: "grid", gap: "1rem" }}>
+            {hasDocumentChoice ? (
+              <DocumentChoiceField
+                enabled={includeDocumentField}
+                onEnabledChange={setIncludeDocumentField}
+              />
+            ) : null}
+            <label className="field">
+              <span className="field-label">Pessoas</span>
+              <small style={hintStyle}>
+                {getPeopleInstructions(personVariables)}
+              </small>
+              <textarea
+                value={namesText}
+                onChange={(event) => setNamesText(event.target.value)}
+                rows={10}
+                placeholder={buildPeoplePlaceholder(personVariables)}
+              />
+              <span style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>
+                {people.length} pessoas informadas
+              </span>
+            </label>
+          </div>
         )}
 
         {step === 2 && (
@@ -308,7 +400,8 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
               <SummaryItem label="Modelo" value={selectedTemplate?.name ?? "-"} />
               <SummaryItem label="Empresa" value={company || "-"} />
               <SummaryItem label="Data" value={issuedDate ? formatDateLongPtBr(issuedDate) : "-"} />
-              <SummaryItem label="Validos" value={`${validRows.length}/${preview.length}`} />
+              <SummaryItem label="Modo" value={isTest ? "Teste" : "Oficial"} />
+              <SummaryItem label="Válidos" value={`${validRows.length}/${preview.length}`} />
             </div>
             <div className="dark-card-flat table-scroll" style={{ marginTop: "1.25rem" }}>
               <table className="dark-table" style={{ minWidth: Math.max(680, 220 + personVariables.length * 140) }}>
@@ -361,7 +454,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
         )}
       </div>
 
-      <div style={{ marginTop: "1.5rem", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+      <div className="batch-form-actions">
         <button type="button" disabled={step === 0} onClick={() => setStep((current) => Math.max(0, current - 1))} className="btn btn-ghost" style={{ opacity: step === 0 ? 0.4 : 1 }}>
           <ArrowLeft style={{ width: 15, height: 15 }} /> Voltar
         </button>
@@ -384,6 +477,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
           {message}
         </p>
       ) : null}
+      {showTestInfo ? <TestModeDialog onClose={() => setShowTestInfo(false)} /> : null}
     </section>
   );
 }
@@ -396,30 +490,73 @@ const hintStyle = {
 
 function WarningMessage({ children }: { children: ReactNode }) {
   return (
-    <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "#d97706" }}>
+    <p style={{ marginTop: "0.75rem", borderRadius: "var(--radius-md)", background: "var(--warning-soft)", border: "1px solid color-mix(in oklch, var(--warning) 35%, transparent)", padding: "0.5rem 0.75rem", fontSize: "0.875rem", fontWeight: 500, color: "var(--warning)" }}>
       {children}
     </p>
   );
 }
 
-function buildBatchMessage(result: BatchResult, fallbackTotal: number) {
-  const total = result.total ?? fallbackTotal;
-  const created = result.created ?? 0;
-  const errors = result.errors?.length ?? 0;
+function DocumentChoiceField({
+  enabled,
+  onEnabledChange,
+}: {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+}) {
+  return (
+    <div className="field">
+      <span className="field-label">CPF dos participantes</span>
+      <small style={hintStyle}>
+        Escolha se as linhas do lote terão CPF/documento para aparecer no certificado.
+      </small>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, borderRadius: "var(--radius-md)", background: "var(--surface-2)", padding: 4 }}>
+        <button
+          type="button"
+          onClick={() => onEnabledChange(true)}
+          style={documentChoiceButtonStyle(enabled)}
+        >
+          Com CPF
+        </button>
+        <button
+          type="button"
+          onClick={() => onEnabledChange(false)}
+          style={documentChoiceButtonStyle(!enabled)}
+        >
+          Sem CPF
+        </button>
+      </div>
+    </div>
+  );
+}
 
-  if (result.status === "completed") {
-    if (errors > 0) {
-      return `Lote finalizado: ${created}/${total} gerados e ${errors} com erro.`;
-    }
+function TestModeDialog({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+        <h2 className="text-base font-bold text-slate-900">Modo teste ativado</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-600">
+          O lote será gerado para conferência com códigos TESTE. Nenhum certificado do lote avança a sequência oficial TCS-BR.
+        </p>
+        <button type="button" onClick={onClose} className="mt-4 w-full rounded-md bg-teal-700 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-800">
+          Entendi
+        </button>
+      </div>
+    </div>
+  );
+}
 
-    return `Lote finalizado: ${created}/${total} certificados gerados.`;
-  }
-
-  if (result.status === "failed") {
-    return result.errors?.[0] ?? "Lote falhou.";
-  }
-
-  return `Lote iniciado com ${total} certificados. Voce pode sair desta tela.`;
+function documentChoiceButtonStyle(active: boolean) {
+  return {
+    border: `1px solid ${active ? "var(--brand-500)" : "var(--border-muted)"}`,
+    borderRadius: "var(--radius-sm)",
+    background: active ? "var(--brand-50)" : "var(--surface-1)",
+    color: active ? "var(--brand-700)" : "var(--text-secondary)",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    fontSize: "0.875rem",
+    fontWeight: 700,
+    padding: "0.55rem 0.75rem",
+  } as const;
 }
 
 function SummaryItem({ label, value }: { label: string; value: string }) {
@@ -510,20 +647,20 @@ function buildPreviewRows({
     if (person.extraValues.length) errors.push("campos extras");
 
     for (const variable of sharedVariables) {
-      if (variable.required && !sharedValues[variable.key]?.trim()) {
+      if (isTemplateVariableRequired(variable) && !sharedValues[variable.key]?.trim()) {
         errors.push(`${getFieldLabel(variable)} vazio`);
       }
     }
 
     for (const variable of personVariables) {
       const value = person.values[variable.key]?.trim() ?? "";
-      if (variable.required && !value) {
+      if (isTemplateVariableRequired(variable) && !value) {
         errors.push(`${getFieldLabel(variable)} vazio`);
       }
 
       const validationError = validateTemplateFieldValue(variable, value);
       if (validationError) {
-        errors.push(`${getFieldLabel(variable)} invalido`);
+        errors.push(`${getFieldLabel(variable)} inválido`);
       }
 
       const duplicateKey = getTemplateDuplicateKey(variable, value);
@@ -557,12 +694,28 @@ function isPeriodField(variable: { key: string; label: string }) {
   return getTemplateFieldMetadata(variable).kind === "period";
 }
 
+function shouldUseDocumentChoice(
+  variable: { key: string; label: string },
+  variables: Array<{ key: string; label: string }>,
+) {
+  const kind = getTemplateFieldMetadata(variable).kind;
+  const hasCalculatedDocumentText = variables.some(
+    (item) => getTemplateFieldMetadata(item).kind === "document_phrase",
+  );
+
+  return hasCalculatedDocumentText && (
+    kind === "cpf" ||
+    kind === "cpf_cnpj" ||
+    kind === "generic_document"
+  );
+}
+
 function getBatchBlockReason(
   recipientVariable: BatchVariable | null,
   personVariables: BatchVariable[],
 ) {
   if (!personVariables.length || !recipientVariable) {
-    return "Este modelo precisa de um campo de aluno/nome para emitir em lote com seguranca.";
+    return "Este modelo precisa de um campo de aluno/nome para emitir em lote com segurança.";
   }
 
   return "";
@@ -570,6 +723,14 @@ function getBatchBlockReason(
 
 function getPersonInputLabel(personVariables: BatchVariable[]) {
   return personVariables.map(getFieldLabel).join("; ") || "Nome";
+}
+
+function getPeopleInstructions(personVariables: BatchVariable[]) {
+  if (personVariables.length <= 1) {
+    return "Informe uma pessoa por linha.";
+  }
+
+  return `Informe uma pessoa por linha, separando por ponto e vírgula nesta ordem: ${getPersonInputLabel(personVariables)}.`;
 }
 
 function buildPeoplePlaceholder(personVariables: BatchVariable[]) {

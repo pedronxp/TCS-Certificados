@@ -102,6 +102,7 @@ model CertificateIssue {
   revokeReason     String?
   deleteAt         DateTime?
   hiddenAt         DateTime?
+  isTest           Boolean           @default(false)
 
   templateId String
   template   CertificateTemplate @relation(fields: [templateId], references: [id])
@@ -156,6 +157,7 @@ model CertificateBatch {
   values      Json
   company     String
   issuedDate  String
+  isTest      Boolean                @default(false)
   startedAt   DateTime               @default(now())
   finishedAt  DateTime?
   lockedAt    DateTime?

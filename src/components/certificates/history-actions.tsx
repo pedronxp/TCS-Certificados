@@ -50,7 +50,7 @@ export function HistoryActions({
 
     setPendingAction(type === "pdf" ? "download-pdf" : "download-native");
     try {
-      const res = await fetch(`/api/certificates/${id}/download/${type}`);
+      const res = await fetch(`/api/certificates/${id}/download/${type}${type === "pdf" ? "?regenerate=1" : ""}`);
       if (!res.ok) {
         const result = await res.json().catch(() => null);
         alert(result?.error ?? "Não foi possível baixar o arquivo agora.");

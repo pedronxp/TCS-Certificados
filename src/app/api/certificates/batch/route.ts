@@ -2,40 +2,29 @@ import { NextResponse } from "next/server";
 import { parse } from "csv-parse/sync";
 import { readSheet, type CellValue } from "read-excel-file/node";
 import { requireAdmin } from "@/lib/auth";
-import { failStaleBatchJobs, getBatchJob, processBatchJobChunk, startBatchJob } from "@/lib/batch-jobs";
-import { DATE_FIELD_KEYS } from "@/lib/date-fields";
-import { prisma } from "@/lib/prisma";
 import {
-  formatTemplateFieldValue,
-  getTemplateDuplicateKey,
-  getTemplateFieldAliases,
-  getTemplateVariableLabel,
-  isTemplateBatchPersonField,
-  isTemplateRecipientField,
-  mirrorTemplateFieldValues,
-  validateTemplateFieldValue,
-} from "@/lib/template-variable-fields";
+  normalizeBatchHeader,
+  normalizeBatchRowsForTemplate,
+  validateBatchTemplateRows,
+  validateBatchTemplateSupport,
+  validateSingleCompanyAndDate,
+} from "@/lib/batch-certificate-validation";
+import { failStaleBatchJobs, getBatchJob, processBatchJobChunk, startBatchJob } from "@/lib/batch-jobs";
+import { prisma } from "@/lib/prisma";
 import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-const companyColumns = ["empresa", "company"];
-const dateColumns = [...DATE_FIELD_KEYS];
-
-type BatchRouteVariable = {
-  key: string;
-  label: string;
-  required: boolean;
-};
-
 export async function POST(request: Request) {
   const user = await requireAdmin();
   const formData = await request.formData();
   const templateId = String(formData.get("templateId") ?? "");
   const file = formData.get("file");
-  const hasUploadedFile = file instanceof File && file.size > 0 && Boolean(file.name);
+  const uploadedFile = file instanceof File && file.size > 0 && Boolean(file.name) ? file : null;
+  const hasUploadedFile = Boolean(uploadedFile);
+  const isTest = formData.get("isTest") === "true";
 
   const template = await prisma.certificateTemplate.findUnique({
     where: { id: templateId },
@@ -48,23 +37,24 @@ export async function POST(request: Request) {
   });
 
   if (!template) {
-    return NextResponse.json({ error: "Modelo nao encontrado." }, { status: 404 });
+    return NextResponse.json({ error: "Modelo não encontrado." }, { status: 404 });
   }
 
-  const supportError = validateTemplateBatchSupport(template.variables);
+  const supportError = validateBatchTemplateSupport(template.variables);
   if (supportError) {
     return NextResponse.json({ error: supportError }, { status: 400 });
   }
 
-  if (hasUploadedFile) {
-    const fileError = validateBatchSpreadsheetFile(file);
+  if (uploadedFile) {
+    const fileError = validateBatchSpreadsheetFile(uploadedFile);
     if (fileError) {
       return NextResponse.json({ error: fileError }, { status: 400 });
     }
   }
 
-  const parsedRows = hasUploadedFile ? await parseRows(file) : parseManualRows(formData);
-  const rows = normalizeRowsForTemplate(parsedRows, template.variables);
+  const lineOffset = hasUploadedFile ? 2 : 1;
+  const parsedRows = uploadedFile ? await parseRows(uploadedFile) : parseManualRows(formData);
+  const rows = normalizeBatchRowsForTemplate(parsedRows, template.variables);
   if (!rows.length) {
     return NextResponse.json({ error: "Informe os nomes ou envie uma planilha." }, { status: 400 });
   }
@@ -74,18 +64,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: rowCountError }, { status: 400 });
   }
 
-  const batchRuleError = validateSingleCompanyAndDate(rows);
+  const batchRuleError = validateSingleCompanyAndDate(rows, lineOffset);
   if (batchRuleError) {
     return NextResponse.json({ error: batchRuleError }, { status: 400 });
   }
 
-  const templateRowsError = validateTemplateRows(rows, template.variables, hasUploadedFile ? 2 : 1);
+  const templateRowsError = validateBatchTemplateRows(rows, template.variables, lineOffset);
   if (templateRowsError) {
     return NextResponse.json({ error: templateRowsError }, { status: 400 });
   }
 
   try {
-    const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset: hasUploadedFile ? 2 : 1 });
+    const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset, isTest });
 
     return NextResponse.json({
       jobId: job.id,
@@ -118,7 +108,7 @@ export async function GET(request: Request) {
 
   let job = await getBatchJob(jobId, user.id);
   if (!job) {
-    return NextResponse.json({ error: "Lote nao encontrado." }, { status: 404 });
+    return NextResponse.json({ error: "Lote não encontrado." }, { status: 404 });
   }
 
   if (job.status === "RUNNING") {
@@ -321,141 +311,6 @@ function rowToObject(headers: string[], row: Array<CellValue | null>) {
   return data;
 }
 
-function normalizeRowsForTemplate(
-  rows: Record<string, string>[],
-  variables: BatchRouteVariable[],
-) {
-  return rows.map((row) => {
-    const normalizedRow = { ...row };
-
-    for (const variable of variables) {
-      const value = findValueForVariable(row, variable);
-      if (value) {
-        normalizedRow[variable.key] = formatTemplateFieldValue(variable, value);
-      }
-    }
-
-    return mirrorTemplateFieldValues(variables, normalizedRow);
-  });
-}
-
-function findValueForVariable(row: Record<string, string>, variable: BatchRouteVariable) {
-  for (const alias of getTemplateFieldAliases(variable)) {
-    const value = findColumnValue(row, alias);
-    if (value.trim()) return value;
-  }
-
-  return "";
-}
-
-function findColumnValue(row: Record<string, string>, alias: string) {
-  const normalizedAlias = normalizeHeader(alias);
-  for (const [key, value] of Object.entries(row)) {
-    if (normalizeHeader(key) === normalizedAlias) {
-      return String(value ?? "").trim();
-    }
-  }
-
-  return "";
-}
-
-function validateTemplateBatchSupport(variables: BatchRouteVariable[]) {
-  const personVariables = variables.filter(isTemplateBatchPersonField);
-  if (!personVariables.length || !personVariables.some(isTemplateRecipientField)) {
-    return "Este modelo precisa de um campo de aluno/nome para emissao em lote.";
-  }
-
-  return null;
-}
-
-function validateTemplateRows(
-  rows: Record<string, string>[],
-  variables: BatchRouteVariable[],
-  lineOffset: number,
-) {
-  const seen = new Map<string, number>();
-
-  for (const [index, row] of rows.entries()) {
-    const line = index + lineOffset;
-
-    for (const variable of variables) {
-      const value = String(row[variable.key] ?? "").trim();
-      const label = getTemplateVariableLabel(variable);
-
-      if (variable.required && !value) {
-        return `Linha ${line}: informe ${label}.`;
-      }
-
-      const validationError = validateTemplateFieldValue(variable, value);
-      if (validationError) {
-        return `Linha ${line}: ${label} invalido. ${validationError}`;
-      }
-
-      if (isTemplateBatchPersonField(variable)) {
-        const duplicateKey = getTemplateDuplicateKey(variable, value);
-        if (duplicateKey) {
-          const firstLine = seen.get(duplicateKey);
-          if (firstLine) {
-            return `Linha ${line}: ${label} duplicado da linha ${firstLine}.`;
-          }
-
-          seen.set(duplicateKey, line);
-        }
-      }
-    }
-  }
-
-  return null;
-}
-
-function validateSingleCompanyAndDate(rows: Record<string, string>[]) {
-  const companyColumn = findColumn(rows, companyColumns);
-  const dateColumn = findColumn(rows, dateColumns);
-
-  if (!companyColumn) {
-    return 'Inclua uma coluna "empresa" na planilha para emissao em lote.';
-  }
-
-  if (!dateColumn) {
-    return 'Inclua uma coluna "data" na planilha para emissao em lote.';
-  }
-
-  const firstCompany = normalizeComparableValue(rows[0][companyColumn]);
-  const firstDate = normalizeComparableValue(rows[0][dateColumn]);
-
-  if (!firstCompany) {
-    return "Linha 2: informe a empresa.";
-  }
-
-  if (!firstDate) {
-    return "Linha 2: informe a data.";
-  }
-
-  for (const [index, row] of rows.entries()) {
-    const line = index + 2;
-    const company = normalizeComparableValue(row[companyColumn]);
-    const date = normalizeComparableValue(row[dateColumn]);
-
-    if (!company) {
-      return `Linha ${line}: informe a empresa.`;
-    }
-
-    if (!date) {
-      return `Linha ${line}: informe a data.`;
-    }
-
-    if (company !== firstCompany) {
-      return `Linha ${line}: a empresa deve ser igual em todo o lote.`;
-    }
-
-    if (date !== firstDate) {
-      return `Linha ${line}: a data deve ser igual em todo o lote.`;
-    }
-  }
-
-  return null;
-}
-
 function normalizeRows(rows: Record<string, unknown>[]) {
   return rows.map((row) => {
     const normalizedRow: Record<string, string> = {};
@@ -463,35 +318,11 @@ function normalizeRows(rows: Record<string, unknown>[]) {
     for (const [key, value] of Object.entries(row)) {
       const stringValue = formatCellValue(value);
       normalizedRow[key] = stringValue;
-      normalizedRow[normalizeHeader(key)] ??= stringValue;
+      normalizedRow[normalizeBatchHeader(key)] ??= stringValue;
     }
 
     return normalizedRow;
   });
-}
-
-function findColumn(rows: Record<string, string>[], aliases: string[]) {
-  const headers = Object.keys(rows[0] ?? {});
-  const normalizedAliases = new Set(aliases.map(normalizeHeader));
-  return headers.find((header) => normalizedAliases.has(normalizeHeader(header)));
-}
-
-function normalizeHeader(value: string) {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function normalizeComparableValue(value: unknown) {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
 }
 
 function formatCellValue(value: unknown) {

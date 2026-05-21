@@ -1,7 +1,12 @@
 import { buildDefaultCertificateDeleteAt } from "@/lib/certificate-validity";
 import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
-import { formatTemplateFieldValue, mirrorTemplateFieldValues } from "@/lib/template-variable-fields";
+import {
+  applyCalculatedTemplateValues,
+  formatTemplateFieldValue,
+  isTemplateVariableRequired,
+  mirrorTemplateFieldValues,
+} from "@/lib/template-variable-fields";
 import {
   DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE,
   renderNativeCertificateBuffer,
@@ -9,6 +14,7 @@ import {
   type RenderInput,
 } from "@/lib/render-certificate";
 import { deleteCertificateFiles, uploadCertificateFile } from "@/lib/supabase";
+import { randomUUID } from "node:crypto";
 import {
   buildVerificationTemplateValues,
   generateVerificationCode,
@@ -23,11 +29,13 @@ export async function issueCertificate({
   values,
   issuedById,
   batchId,
+  isTest = false,
 }: {
   templateId: string;
   values: Record<string, string>;
   issuedById: string;
   batchId?: string;
+  isTest?: boolean;
 }) {
   const template = await prisma.certificateTemplate.findUnique({
     where: { id: templateId },
@@ -45,19 +53,22 @@ export async function issueCertificate({
     template.variables,
     applyIssuerRestrictions(values, template.variables, issuedBy),
   );
+  const issueReadyValues = applyCalculatedTemplateValues(template.variables, securedValues);
 
   for (const variable of template.variables) {
     if (isSystemCertificateVariableKey(variable.key)) continue;
 
-    if (variable.required && !String(securedValues[variable.key] ?? "").trim()) {
+    if (isTemplateVariableRequired(variable) && !String(issueReadyValues[variable.key] ?? "").trim()) {
       throw new Error(`Variável obrigatória ausente: ${variable.label}`);
     }
   }
 
   const issuedAt = new Date();
-  const verificationCode = await reserveNextVerificationCode(issuedAt);
+  const verificationCode = isTest
+    ? generateTestVerificationCode(issuedAt)
+    : await reserveNextVerificationCode(issuedAt);
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  const issueValues = { ...securedValues, ...buildVerificationTemplateValues(verificationCode) };
+  const issueValues = { ...issueReadyValues, ...buildVerificationTemplateValues(verificationCode) };
   const normalizedValues = normalizeIssueValues(normalizeTemplateFieldValues(issueValues, template.variables));
   const recipientName = findValue(normalizedValues, ["nome", "name", "participante", "aluno", "titular"]) || "Sem nome";
   const recipientEmail = findValue(normalizedValues, ["email", "e_mail"]) || undefined;
@@ -92,6 +103,7 @@ export async function issueCertificate({
       values: normalizedValues.original,
       issuedAt,
       deleteAt: buildDefaultCertificateDeleteAt(issuedAt),
+      isTest,
       template: { connect: { id: templateId } },
       issuedBy: { connect: { id: issuedById } },
       ...(batchId ? { batch: { connect: { id: batchId } } } : {}),
@@ -150,16 +162,17 @@ export async function renderCertificatePreviewPdf({
     template.variables,
     applyIssuerRestrictions(values, template.variables, issuedBy),
   );
+  const previewReadyValues = applyCalculatedTemplateValues(template.variables, securedValues);
 
   for (const variable of template.variables) {
     if (isSystemCertificateVariableKey(variable.key)) continue;
 
-    if (variable.required && !String(securedValues[variable.key] ?? "").trim()) {
+    if (isTemplateVariableRequired(variable) && !String(previewReadyValues[variable.key] ?? "").trim()) {
       throw new Error(`Variável obrigatória ausente: ${variable.label}`);
     }
   }
 
-  const normalizedValues = normalizeIssueValues(normalizeTemplateFieldValues(securedValues, template.variables));
+  const normalizedValues = normalizeIssueValues(normalizeTemplateFieldValues(previewReadyValues, template.variables));
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const previewCode = "PREVIA";
   const pdf = await renderPdfBufferSafely({
@@ -228,6 +241,14 @@ async function reserveNextVerificationCode(issuedAt: Date) {
   });
 
   return generateVerificationCode(sequence.value, issuedAt);
+}
+
+function generateTestVerificationCode(issuedAt: Date) {
+  const timestamp = issuedAt
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\.\d{3}Z$/, "Z");
+  return `TESTE-${timestamp}-${randomUUID().slice(0, 8).toUpperCase()}`;
 }
 
 async function findHighestExistingVerificationSequence() {
@@ -417,6 +438,8 @@ function findDocumentValue(values: NormalizedIssueValues) {
   if (directDocument) return directDocument;
 
   for (const [key, value] of Object.entries(values.normalized)) {
+    if (key === "documento_participante_texto") continue;
+
     const keyTokens = key.split("_").filter(Boolean);
     if (
       value &&

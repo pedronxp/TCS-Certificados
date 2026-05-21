@@ -69,7 +69,7 @@ export default async function ValidatePage({
     ? `${validationUrl}?documento=${encodeURIComponent(documentValue)}`
     : validationUrl;
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(
-    `Confira a validacao do certificado: ${validationUrlWithDocument}`,
+    `Confira a validação do certificado: ${validationUrlWithDocument}`,
   )}`;
   const expired = isCertificateDocumentExpired(issue?.deleteAt ?? null);
   const valid = issue?.status === "ISSUED";
@@ -96,7 +96,7 @@ export default async function ValidatePage({
             </span>
             <span className="sidebar-logo-text">
               <span className="sidebar-logo-title">TCS Certificados</span>
-              <span className="sidebar-logo-subtitle">Validacao publica</span>
+              <span className="sidebar-logo-subtitle">Validação pública</span>
             </span>
           </Link>
         </div>
@@ -110,7 +110,7 @@ export default async function ValidatePage({
               </span>
               <h1>{validationState.title}</h1>
               <p>
-                {validationState.description} Codigo{" "}
+                {validationState.description} Código{" "}
                 <strong>{issue.verificationCode}</strong>.
               </p>
 
@@ -131,7 +131,7 @@ export default async function ValidatePage({
                   <dd>{issue.template.name}</dd>
                 </div>
                 <div>
-                  <dt>Emissao</dt>
+                  <dt>Emissão</dt>
                   <dd>{issue.issuedAt.toLocaleDateString("pt-BR")}</dd>
                 </div>
                 <div>
@@ -140,7 +140,7 @@ export default async function ValidatePage({
                 </div>
                 {expired && issue.deleteAt ? (
                   <div>
-                    <dt>Expiracao</dt>
+                  <dt>Expiração</dt>
                     <dd>{issue.deleteAt.toLocaleDateString("pt-BR")}</dd>
                   </div>
                 ) : null}
@@ -165,7 +165,7 @@ export default async function ValidatePage({
                 </a>
                 <Link className="btn btn-ghost" href="/validar">
                   <Search className="size-4" />
-                  Consultar outro codigo
+                  Consultar outro código
                 </Link>
               </div>
             </article>
@@ -176,8 +176,8 @@ export default async function ValidatePage({
                   <div className="public-document-viewer-header">
                     <FileText className="size-5" />
                     <div>
-                      <h2>Visualizacao do documento</h2>
-                      <p>Arquivo liberado apos a conferencia do documento informado.</p>
+                      <h2>Visualização do documento</h2>
+                      <p>Arquivo liberado após a conferência do documento informado.</p>
                     </div>
                   </div>
                   <iframe
@@ -193,8 +193,8 @@ export default async function ValidatePage({
                   </div>
                   <h2>Consulta oficial</h2>
                   <p>
-                    O codigo existe, mas o arquivo publico fica indisponivel quando o certificado
-                    esta revogado ou expirado.
+                    O código existe, mas o arquivo público fica indisponível quando o certificado
+                    está revogado ou expirado.
                   </p>
                   <code>{issue.verificationCode}</code>
                 </>
@@ -205,12 +205,12 @@ export default async function ValidatePage({
           <article className="public-validation-result public-validation-result-narrow">
             <span className={`chip ${documentCheck.hasInput ? "chip-danger" : "chip-warning"}`}>
               <AlertCircle className="size-4" />
-              {documentCheck.hasInput ? "Documento nao validado" : "Documento necessario"}
+              {documentCheck.hasInput ? "Documento não validado" : "Documento necessário"}
             </span>
-            <h1>{documentCheck.hasInput ? "Documento nao confere" : "Informe o documento"}</h1>
+            <h1>{documentCheck.hasInput ? "Documento não confere" : "Informe o documento"}</h1>
             <p>
-              O codigo <strong>{issue.verificationCode}</strong> foi encontrado, mas a visualizacao
-              publica exige o CPF, RG ou documento do participante para confirmar que o arquivo
+              O código <strong>{issue.verificationCode}</strong> foi encontrado, mas a visualização
+              pública exige o CPF, RG ou documento do participante para confirmar que o arquivo
               pertence a pessoa correta.
             </p>
 
@@ -218,7 +218,7 @@ export default async function ValidatePage({
               <label className="field">
                 <span className="field-label">Documento do participante</span>
                 <small className="public-field-hint">
-                  Use a mesma numeracao informada no certificado. Pontos, tracos e espacos sao opcionais.
+                  Use a mesma numeração informada no certificado. Pontos, traços e espaços são opcionais.
                 </small>
                 <SensitiveDocumentInput
                   name="documento"
@@ -238,7 +238,7 @@ export default async function ValidatePage({
             <div className="public-validation-actions">
               <Link className="btn btn-ghost" href="/validar">
                 <Search className="size-4" />
-                Consultar outro codigo
+                Consultar outro código
               </Link>
             </div>
           </article>
@@ -246,14 +246,14 @@ export default async function ValidatePage({
           <article className="public-validation-result public-validation-result-narrow">
             <span className="chip chip-danger">
               <XCircle className="size-4" />
-              Codigo nao encontrado
+              Código não encontrado
             </span>
-            <h1>Nao foi possivel validar este certificado</h1>
-            <p>Confira o codigo informado ou solicite um novo link de validacao.</p>
+            <h1>Não foi possível validar este certificado</h1>
+            <p>Confira o código informado ou solicite um novo link de validação.</p>
             <div className="public-validation-actions">
               <Link className="btn btn-ghost" href="/validar">
                 <Search className="size-4" />
-                Consultar outro codigo
+                Consultar outro código
               </Link>
             </div>
           </article>
@@ -276,7 +276,7 @@ function RateLimitedValidation({ retryAfterSeconds }: { retryAfterSeconds: numbe
             </span>
             <span className="sidebar-logo-text">
               <span className="sidebar-logo-title">TCS Certificados</span>
-              <span className="sidebar-logo-subtitle">Validacao publica</span>
+              <span className="sidebar-logo-subtitle">Validação pública</span>
             </span>
           </Link>
         </div>
@@ -288,7 +288,7 @@ function RateLimitedValidation({ retryAfterSeconds }: { retryAfterSeconds: numbe
           </span>
           <h1>Consulta temporariamente limitada</h1>
           <p>
-            Por seguranca, aguarde cerca de {retryMinutes} minuto{retryMinutes > 1 ? "s" : ""} antes
+            Por segurança, aguarde cerca de {retryMinutes} minuto{retryMinutes > 1 ? "s" : ""} antes
             de consultar outro certificado.
           </p>
           <div className="public-validation-actions">
@@ -315,8 +315,8 @@ function getValidationState({
       chipClass: "chip-warning",
       icon: <Clock3 className="size-4" />,
       label: "Documento expirado",
-      title: "Codigo encontrado",
-      description: "O certificado foi encontrado, mas o documento nao esta mais disponivel porque expirou.",
+      title: "Código encontrado",
+      description: "O certificado foi encontrado, mas o documento não está mais disponível porque expirou.",
       statusLabel: "Documento expirado",
     };
   }
@@ -325,10 +325,10 @@ function getValidationState({
     return {
       chipClass: "chip-success",
       icon: <CheckCircle2 className="size-4" />,
-      label: "Certificado valido",
+      label: "Certificado válido",
       title: "Autenticidade confirmada",
-      description: "Este link publico confirma a emissao e integridade do certificado.",
-      statusLabel: "Valido",
+      description: "Este link público confirma a emissão e integridade do certificado.",
+      statusLabel: "Válido",
     };
   }
 
@@ -336,8 +336,8 @@ function getValidationState({
     chipClass: "chip-danger",
     icon: <XCircle className="size-4" />,
     label: "Certificado revogado",
-    title: "Validacao com restricao",
-    description: "Este link publico confirma a emissao, mas o certificado possui restricao.",
+    title: "Validação com restrição",
+    description: "Este link público confirma a emissão, mas o certificado possui restrição.",
     statusLabel: "Revogado",
   };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, LoaderCircle, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 
@@ -30,6 +30,7 @@ export function BatchProgressToast() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<BatchJobResponse | null>(null);
   const [hidden, setHidden] = useState(false);
+  const completedRedirectedRef = useRef<string | null>(null);
 
   useEffect(() => {
     function syncJobId() {
@@ -71,6 +72,10 @@ export function BatchProgressToast() {
         if (nextJob.status !== "running") {
           router.refresh();
         }
+        if (nextJob.status === "completed" && completedRedirectedRef.current !== nextJob.id) {
+          completedRedirectedRef.current = nextJob.id;
+          router.push(`/certificados/concluido?batchId=${nextJob.id}`);
+        }
       }
     }
 
@@ -105,44 +110,44 @@ export function BatchProgressToast() {
   }
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 w-[min(24rem,calc(100vw-2rem))] rounded-lg border border-slate-200 bg-white p-4 shadow-lg">
-      <div className="flex items-start gap-3">
-        <div className="mt-0.5">
+    <div className="batch-progress-toast">
+      <div className="batch-progress-content">
+        <div className="batch-progress-icon">
           {status === "running" ? (
-            <LoaderCircle className="size-5 animate-spin text-teal-700" />
+            <LoaderCircle className="size-5 animate-spin batch-progress-icon-brand" />
           ) : status === "completed" && !hasErrors ? (
-            <CheckCircle2 className="size-5 text-teal-700" />
+            <CheckCircle2 className="size-5 batch-progress-icon-success" />
           ) : (
-            <AlertCircle className="size-5 text-amber-600" />
+            <AlertCircle className="size-5 batch-progress-icon-warning" />
           )}
         </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-bold text-slate-950">{title}</p>
+        <div className="batch-progress-body">
+          <div className="batch-progress-header">
+            <p className="batch-progress-title">{title}</p>
             <button
               type="button"
               onClick={close}
-              className="grid size-7 shrink-0 place-items-center rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-950"
-              aria-label="Fechar notificacao"
+              className="batch-progress-close"
+              aria-label="Fechar notificação"
             >
               <X className="size-4" />
             </button>
           </div>
-          <p className="mt-1 text-xs text-slate-500">
+          <p className="batch-progress-meta">
             {job
               ? `${job.processed}/${job.total} processados, ${job.created} gerados`
-              : "Iniciando geracao do lote"}
+              : "Iniciando geração do lote"}
           </p>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div className="h-full rounded-full bg-teal-700 transition-all" style={{ width: `${progress}%` }} />
+          <div className="batch-progress-bar">
+            <div className="batch-progress-bar-fill" style={{ width: `${progress}%` }} />
           </div>
-          <div className="mt-2 flex items-center justify-between text-xs font-semibold text-slate-600">
+          <div className="batch-progress-footer">
             <span>{progress}%</span>
             {job?.errors.length ? <span>{job.errors.length} com erro</span> : null}
           </div>
-          {job?.fatalError ? <p className="mt-2 text-xs font-medium text-red-700">{job.fatalError}</p> : null}
+          {job?.fatalError ? <p className="batch-progress-error batch-progress-error-danger">{job.fatalError}</p> : null}
           {job?.errors.length ? (
-            <p className="mt-2 line-clamp-2 text-xs text-amber-800">{job.errors[0]}</p>
+            <p className="batch-progress-error batch-progress-error-warning">{job.errors[0]}</p>
           ) : null}
         </div>
       </div>

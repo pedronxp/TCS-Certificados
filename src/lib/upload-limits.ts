@@ -5,7 +5,7 @@ export const MAX_BATCH_ROWS = 500;
 
 export function validateFileSize(file: File, maxBytes: number) {
   if (file.size <= maxBytes) return null;
-  return `Arquivo muito grande. Envie um arquivo de ate ${formatBytes(maxBytes)}.`;
+  return `Arquivo muito grande. Envie um arquivo de até ${formatBytes(maxBytes)}.`;
 }
 
 export function validateBatchSpreadsheetFile(file: File) {
@@ -15,7 +15,7 @@ export function validateBatchSpreadsheetFile(file: File) {
   const name = file.name.toLowerCase();
   if (name.endsWith(".csv") || name.endsWith(".xlsx")) return null;
 
-  return "Envie uma planilha CSV ou XLSX valida.";
+  return "Envie uma planilha CSV ou XLSX válida.";
 }
 
 export function validateDocxFile(file: File) {
@@ -26,7 +26,7 @@ export function validateDocxFile(file: File) {
     return null;
   }
 
-  return "Envie um arquivo DOCX valido.";
+  return "Envie um arquivo DOCX válido.";
 }
 
 export function validateOfficePreviewFile(file: File) {
@@ -42,7 +42,7 @@ export function validateOfficePreviewFile(file: File) {
     return null;
   }
 
-  return "Envie um arquivo DOCX ou PPTX valido.";
+  return "Envie um arquivo DOCX ou PPTX válido.";
 }
 
 export function validateTemplateImportFile(file: File) {
@@ -61,18 +61,18 @@ export function validateTemplateImportFile(file: File) {
 
   return allowedByName || allowedByType
     ? null
-    : "Envie um modelo DOCX, PPTX, PDF ou imagem valido.";
+    : "Envie um modelo DOCX, PPTX, PDF ou imagem válido.";
 }
 
 export function validateTemplatePayloadSize(payload: unknown) {
   const size = Buffer.byteLength(JSON.stringify(payload ?? {}), "utf8");
   if (size <= MAX_TEMPLATE_PAYLOAD_BYTES) return null;
-  return `Modelo muito grande. Salve um modelo de ate ${formatBytes(MAX_TEMPLATE_PAYLOAD_BYTES)}.`;
+  return `Modelo muito grande. Salve um modelo de até ${formatBytes(MAX_TEMPLATE_PAYLOAD_BYTES)}.`;
 }
 
 export function validateBatchRowCount(total: number) {
   if (total <= MAX_BATCH_ROWS) return null;
-  return `O lote pode ter no maximo ${MAX_BATCH_ROWS} linhas por envio.`;
+  return `O lote pode ter no máximo ${MAX_BATCH_ROWS} linhas por envio.`;
 }
 
 function formatBytes(bytes: number) {

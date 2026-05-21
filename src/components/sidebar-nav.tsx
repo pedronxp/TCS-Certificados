@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BadgeCheck, FileText, LayoutDashboard, Upload, Users } from "lucide-react";
+import { BadgeCheck, Braces, FileText, LayoutDashboard, Upload, Users } from "lucide-react";
 
 type UserRole = "ADMIN" | "OPERADOR";
 
@@ -13,6 +13,7 @@ const navItems = [
   { href: "/certificados/historico", label: "Histórico", icon: FileText, roles: ["ADMIN", "OPERADOR"] },
   { href: "/modelos", label: "Modelos", icon: FileText, roles: ["ADMIN"] },
   { href: "/usuarios", label: "Usuários", icon: Users, roles: ["ADMIN"] },
+  { href: "/variaveis", label: "Variáveis", icon: Braces, roles: ["ADMIN"] },
 ] satisfies Array<{
   href: string;
   label: string;
