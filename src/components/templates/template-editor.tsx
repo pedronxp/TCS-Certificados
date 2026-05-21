@@ -23,6 +23,7 @@ import {
 import { useConfirmDialog } from "@/components/confirmation-dialog";
 import { dataUrlToHtmlDocument, extractDocumentPreview, extractDocumentPreviewFromDataUrl, extractEditableDocxElementsFromDataUrl } from "@/lib/document-extract.client";
 import { templateImportDraftStorageKey, type TemplateImportDraft } from "@/lib/template-import-draft";
+import { getTemplateVariableDefaultRequired } from "@/lib/template-variable-fields";
 
 type TemplateEditorProps = {
   initial?: {
@@ -159,19 +160,32 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const map = new Map<string, { label: string; required: boolean }>();
     if (layout.baseDocumentMode !== "editable") {
       for (const key of extractVariableKeys(layout.basePreviewHtml ?? "")) {
-        map.set(key, { label: labelFromKey(key), required: true });
+        map.set(key, { label: labelFromKey(key), required: getTemplateVariableDefaultRequired({ key }) });
       }
     }
     for (const el of layout.elements) {
       for (const key of extractVariableKeys(el.content ?? "")) {
-        if (!map.has(key)) map.set(key, { label: labelFromKey(key), required: true });
+        if (!map.has(key)) {
+          map.set(key, { label: labelFromKey(key), required: getTemplateVariableDefaultRequired({ key }) });
+        }
       }
       if (el.type === "variable" && el.variableKey && !map.has(el.variableKey)) {
-        map.set(el.variableKey, { label: el.variableLabel ?? labelFromKey(el.variableKey), required: el.variableRequired });
+        map.set(el.variableKey, {
+          label: el.variableLabel ?? labelFromKey(el.variableKey),
+          required: getTemplateVariableDefaultRequired({
+            key: el.variableKey,
+            label: el.variableLabel,
+          }) && el.variableRequired,
+        });
       }
     }
     for (const def of layout.variableDefinitions ?? []) {
-      if (def.key) map.set(def.key, { label: def.label || labelFromKey(def.key), required: def.required });
+      if (def.key) {
+        map.set(def.key, {
+          label: def.label || labelFromKey(def.key),
+          required: getTemplateVariableDefaultRequired({ key: def.key, label: def.label }) && def.required,
+        });
+      }
     }
     return [...map.entries()].map(([key, v]) => ({ key, label: v.label, required: v.required }));
   }, [layout.baseDocumentMode, layout.basePreviewHtml, layout.elements, layout.variableDefinitions]);
@@ -510,7 +524,8 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const token = `{{${key}}}`;
     const hasSelection = range.start !== range.end;
     const nextContent = hasSelection ? `${content.slice(0, range.start)}${token}${content.slice(range.end)}` : token;
-    const definition: TemplateVariableDefinition = { key, label, required: true };
+    const required = getTemplateVariableDefaultRequired({ key, label });
+    const definition: TemplateVariableDefinition = { key, label, required };
 
     setLayout((current) => ({
       ...upsertVariableDefinition(current, definition),
@@ -523,7 +538,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
           content: nextContent,
           variableKey: hasSelection ? element.variableKey : key,
           variableLabel: hasSelection ? element.variableLabel : label,
-          variableRequired: hasSelection ? element.variableRequired : true,
+          variableRequired: hasSelection ? element.variableRequired : required,
         };
       }),
     }));
@@ -547,7 +562,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const definition: TemplateVariableDefinition = {
       key: normalizedKey,
       label: label?.trim() || labelFromKey(normalizedKey),
-      required: true,
+      required: getTemplateVariableDefaultRequired({ key: normalizedKey, label }),
     };
     const range = getSelectedContentRange(selected.content, contentSelection);
     const token = `{{${normalizedKey}}}`;
@@ -593,7 +608,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       content: type === "variable" ? `{{${variableKey}}}` : type === "text" ? "Novo texto" : "",
       variableKey: type === "variable" ? variableKey : undefined,
       variableLabel: type === "variable" ? variableLabel : undefined,
-      variableRequired: true,
+      variableRequired: getTemplateVariableDefaultRequired({ key: variableKey, label: variableLabel }),
       pageIndex: page.index,
       x: Math.min(120, Math.max(0, page.width - (type === "qr" ? 110 : 280))),
       y: Math.min(120, Math.max(0, page.height - (type === "qr" ? 110 : 60))),
@@ -623,7 +638,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
       const updated: TemplateVariableDefinition = {
         key,
         label: existing?.label ?? labelFromKey(key),
-        required: existing?.required ?? true,
+        required: existing?.required ?? getTemplateVariableDefaultRequired({ key }),
         ...patch,
       };
       return upsertVariableDefinition(current, updated);
@@ -634,7 +649,11 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
     const label = newVariableLabel.trim();
     if (!label) return;
     const key = uniqueVariableKey(normalizeVariableKey(label) || "campo", layout);
-    setLayout((current) => upsertVariableDefinition(current, { key, label, required: true }));
+    setLayout((current) => upsertVariableDefinition(current, {
+      key,
+      label,
+      required: getTemplateVariableDefaultRequired({ key, label }),
+    }));
     setNewVariableLabel("");
   }
 
@@ -807,7 +826,7 @@ export function TemplateEditor({ initial }: TemplateEditorProps) {
           variableDefinitions: extracted.variables.map((key) => ({
             key,
             label: labelFromKey(key),
-            required: true,
+            required: getTemplateVariableDefaultRequired({ key, label: labelFromKey(key) }),
           })),
         }
       : nextBase;

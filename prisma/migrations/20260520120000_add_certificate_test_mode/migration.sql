@@ -1,0 +1,2 @@
+ALTER TABLE "CertificateIssue" ADD COLUMN "isTest" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "CertificateBatch" ADD COLUMN "isTest" BOOLEAN NOT NULL DEFAULT false;

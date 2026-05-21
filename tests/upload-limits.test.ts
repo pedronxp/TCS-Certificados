@@ -32,7 +32,7 @@ test("validates template and DOCX uploads", () => {
 
 test("limits batch row count", () => {
   assert.equal(validateBatchRowCount(MAX_BATCH_ROWS), null);
-  assert.match(validateBatchRowCount(MAX_BATCH_ROWS + 1) ?? "", /maximo/);
+  assert.match(validateBatchRowCount(MAX_BATCH_ROWS + 1) ?? "", /máximo/);
 });
 
 test("limits saved template payload size", () => {

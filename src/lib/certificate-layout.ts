@@ -1,5 +1,8 @@
 import { z } from "zod";
-import { getTemplateVariableLabel } from "@/lib/template-variable-fields";
+import {
+  getTemplateVariableDefaultRequired,
+  getTemplateVariableLabel,
+} from "@/lib/template-variable-fields";
 import { isSystemCertificateVariableKey } from "@/lib/verification-code";
 
 export const templateElementSchema = z.object({
@@ -89,7 +92,7 @@ export function extractVariables(layout: TemplateLayout) {
       if (isSystemCertificateVariableKey(key)) continue;
       variables.set(key, {
         label: labelFromKey(key),
-        required: true,
+        required: getTemplateVariableDefaultRequired({ key }),
       });
     }
 
@@ -97,7 +100,7 @@ export function extractVariables(layout: TemplateLayout) {
       if (isSystemCertificateVariableKey(key)) continue;
       variables.set(key, {
         label: labelFromKey(key),
-        required: true,
+        required: getTemplateVariableDefaultRequired({ key }),
       });
     }
   }
@@ -107,7 +110,7 @@ export function extractVariables(layout: TemplateLayout) {
       if (isSystemCertificateVariableKey(key)) continue;
       variables.set(key, {
         label: labelFromKey(key),
-        required: true,
+        required: getTemplateVariableDefaultRequired({ key }),
       });
     }
   }
@@ -117,7 +120,10 @@ export function extractVariables(layout: TemplateLayout) {
     if (isSystemCertificateVariableKey(definition.key)) continue;
     variables.set(definition.key, {
       label: definition.label?.trim() || labelFromKey(definition.key),
-      required: definition.required,
+      required: getTemplateVariableDefaultRequired({
+        key: definition.key,
+        label: definition.label,
+      }) && definition.required,
     });
   }
 
@@ -126,7 +132,10 @@ export function extractVariables(layout: TemplateLayout) {
       if (isSystemCertificateVariableKey(element.variableKey)) continue;
       variables.set(element.variableKey, {
         label: element.variableLabel?.trim() || labelFromKey(element.variableKey),
-        required: element.variableRequired,
+        required: getTemplateVariableDefaultRequired({
+          key: element.variableKey,
+          label: element.variableLabel,
+        }) && element.variableRequired,
       });
     }
   }

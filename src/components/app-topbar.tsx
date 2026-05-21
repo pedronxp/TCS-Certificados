@@ -8,9 +8,11 @@ const routeTitles = [
   { href: "/dashboard", title: "Dashboard", subtitle: "Ambiente privado" },
   { href: "/certificados/emitir", title: "Emitir", subtitle: "Certificado individual" },
   { href: "/certificados/lote", title: "Emissão em lote", subtitle: "Fluxo guiado" },
+  { href: "/certificados/concluido", title: "Certificado pronto", subtitle: "Baixe, envie e acompanhe" },
   { href: "/certificados/historico", title: "Histórico", subtitle: "Consulta e ciclo de vida" },
   { href: "/modelos", title: "Modelos", subtitle: "Layouts oficiais" },
   { href: "/usuarios", title: "Usuários", subtitle: "Acessos e permissões" },
+  { href: "/variaveis", title: "Variáveis", subtitle: "Guia de campos e exemplos" },
 ];
 
 function getRouteInfo(pathname: string) {
@@ -21,7 +23,7 @@ function getRouteInfo(pathname: string) {
   );
 }
 
-export function AppTopbar() {
+export function AppTopbar({ onMenuClick }: { onMenuClick: () => void }) {
   const pathname = usePathname();
   const route = getRouteInfo(pathname);
   const showActions = pathname !== "/dashboard";
@@ -29,10 +31,15 @@ export function AppTopbar() {
   return (
     <header className="app-topbar">
       <div className="app-topbar-left">
-        <label htmlFor="mobile-sidebar-toggle" className="mobile-menu-button app-topbar-menu">
+        <button
+          type="button"
+          className="mobile-menu-button app-topbar-menu"
+          onMouseDown={(event) => event.stopPropagation()}
+          onClick={onMenuClick}
+        >
           <Menu className="size-5" />
-          <span className="sr-only">Abrir menu</span>
-        </label>
+          <span className="sr-only">Abrir ou ocultar menu</span>
+        </button>
         <div className="app-topbar-title">
           <strong>{route.title}</strong>
           <span>{route.subtitle}</span>

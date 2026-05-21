@@ -6,6 +6,7 @@ import { FileUp } from "lucide-react";
 import { labelFromKey, uploadedBaseLayout } from "@/lib/certificate-layout";
 import { extractDocumentPreview } from "@/lib/document-extract.client";
 import { templateImportDraftStorageKey, type TemplateImportDraft } from "@/lib/template-import-draft";
+import { getTemplateVariableDefaultRequired } from "@/lib/template-variable-fields";
 
 export function UploadTemplateButton() {
   const router = useRouter();
@@ -61,7 +62,7 @@ export function UploadTemplateButton() {
               variableDefinitions: extracted.variables.map((key) => ({
                 key,
                 label: labelFromKey(key),
-                required: true,
+                required: getTemplateVariableDefaultRequired({ key, label: labelFromKey(key) }),
               })),
             }
           : layout,

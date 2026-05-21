@@ -19,11 +19,13 @@ export async function startBatchJob({
   rows,
   issuedById,
   lineOffset = 1,
+  isTest = false,
 }: {
   templateId: string;
   rows: Record<string, string>[];
   issuedById: string;
   lineOffset?: number;
+  isTest?: boolean;
 }) {
   const firstRow = rows[0] ?? {};
   const batch = await prisma.certificateBatch.create({
@@ -34,6 +36,7 @@ export async function startBatchJob({
       values: buildBatchJobValues(rows, lineOffset) as Prisma.InputJsonValue,
       company: findFirstValue(firstRow, ["empresa", "company"]),
       issuedDate: findFirstValue(firstRow, DATE_FIELD_KEYS),
+      isTest,
     },
   });
 
@@ -123,6 +126,7 @@ function findBatchForProcessing(id: string, userId: string) {
       lockedAt: true,
       templateId: true,
       createdById: true,
+      isTest: true,
     },
   });
 }
@@ -173,6 +177,7 @@ async function processNextBatchRow(batch: BatchForProcessing, userId: string) {
       values: row,
       issuedById: batch.createdById,
       batchId: batch.id,
+      isTest: batch.isTest,
     });
   } catch (error) {
     rowError = `Linha ${line}: ${error instanceof Error ? error.message : "erro desconhecido"}`;

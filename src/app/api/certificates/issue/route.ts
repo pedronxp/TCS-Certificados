@@ -14,6 +14,7 @@ export async function POST(request: Request) {
       templateId: String(body.templateId),
       values: body.values ?? {},
       issuedById: user.id,
+      isTest: Boolean(body.isTest),
     });
     return NextResponse.json(issue, { status: 201 });
   } catch (error) {

@@ -22,6 +22,14 @@ const BATCH_STATUS: Record<CertificateBatchStatus, { label: string; cls: string 
   FAILED: { label: BATCH_STATUS_LABELS.FAILED, cls: "chip chip-danger" },
 };
 
+function getBatchStatusInfo(status: CertificateBatchStatus, errorCount: number) {
+  if (status === "COMPLETED" && errorCount > 0) {
+    return { label: "Concluído com erros", cls: "chip chip-warning" };
+  }
+
+  return BATCH_STATUS[status] ?? { label: status, cls: "chip" };
+}
+
 export default async function BatchCertificatePage() {
   await requireAdmin();
   await failStaleBatchJobs().catch((error) => {
@@ -110,7 +118,7 @@ export default async function BatchCertificatePage() {
             <tbody>
               {batches.map((batch) => {
                 const errors = Array.isArray(batch.errors) ? batch.errors : [];
-                const statusInfo = BATCH_STATUS[batch.status] ?? { label: batch.status, cls: "chip" };
+                const statusInfo = getBatchStatusInfo(batch.status, errors.length);
                 return (
                   <tr key={batch.id}>
                     <td>{formatDateTime(batch.startedAt)}</td>

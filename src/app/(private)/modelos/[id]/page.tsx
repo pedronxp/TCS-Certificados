@@ -8,6 +8,7 @@ import {
 import { normalizeVisualDocxLayout, templateLayoutSchema } from "@/lib/certificate-layout";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { isTemplateVariableRequired } from "@/lib/template-variable-fields";
 
 export const dynamic = "force-dynamic";
 
@@ -113,7 +114,7 @@ export default async function ViewTemplatePage({
                             {`{{${variable.key}}}`}
                           </div>
                         </td>
-                        <td>{variable.required ? "Sim" : "Não"}</td>
+                        <td>{isTemplateVariableRequired(variable) ? "Sim" : "Não"}</td>
                       </tr>
                     ))}
                   </tbody>

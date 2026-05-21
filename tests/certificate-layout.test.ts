@@ -92,7 +92,7 @@ test("visual DOCX layouts normalize to native mode and keep manual overlays", ()
     {
       key: "cpf",
       label: "CPF",
-      required: true,
+      required: false,
     },
     {
       key: "curso",

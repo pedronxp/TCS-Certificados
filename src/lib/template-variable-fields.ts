@@ -28,6 +28,9 @@ export type TemplateFieldKind =
   | "month"
   | "hours"
   | "period"
+  | "hours_with_unit"
+  | "hours_distribution"
+  | "document_phrase"
   | "course"
   | "instructor"
   | "system_code"
@@ -74,6 +77,21 @@ const BRAZIL_UFS = new Set([
   "TO",
 ]);
 
+const MONTHS_PT = [
+  "janeiro",
+  "fevereiro",
+  "março",
+  "abril",
+  "maio",
+  "junho",
+  "julho",
+  "agosto",
+  "setembro",
+  "outubro",
+  "novembro",
+  "dezembro",
+];
+
 const FIELD_LABELS: Record<TemplateFieldKind, string> = {
   recipient_name: "Aluno",
   email: "E-mail",
@@ -87,12 +105,15 @@ const FIELD_LABELS: Record<TemplateFieldKind, string> = {
   city: "Cidade",
   date: "Data",
   long_date: "Data por Extenso",
-  month: "Mes",
-  hours: "Carga horaria",
-  period: "Periodo do curso",
+  month: "Mês",
+  hours: "Carga horária",
+  period: "Período do curso",
+  hours_with_unit: "Carga horária com unidade",
+  hours_distribution: "Complemento da carga horária",
+  document_phrase: "Texto do documento do participante",
   course: "Curso",
   instructor: "Instrutor",
-  system_code: "Codigo de validacao",
+  system_code: "Código de validação",
   shared: "",
 };
 
@@ -106,12 +127,15 @@ const FIELD_PLACEHOLDERS: Record<TemplateFieldKind, string> = {
   uf: "MG",
   generic_document: "CPF, RG ou outro documento",
   company: "Nome da empresa",
-  city: "Cidade de realizacao, ex.: Cataguases",
+  city: "Cidade de realização, ex.: Cataguases",
   date: "Data do certificado",
   long_date: "29 de novembro de 2019",
   month: "maio",
   hours: "16",
   period: "setembro de 2019",
+  hours_with_unit: "40 horas",
+  hours_distribution: ", distribuída nos dias 2, 3, 4, 5 e 6 de maio de 2026",
+  document_phrase: ", portador(a) do CPF 000.000.000-00",
   course: "Nome do curso",
   instructor: "Nome do instrutor",
   system_code: "Preenchido automaticamente",
@@ -121,23 +145,26 @@ const FIELD_PLACEHOLDERS: Record<TemplateFieldKind, string> = {
 const FIELD_DESCRIPTIONS: Record<TemplateFieldKind, string> = {
   recipient_name: "Nome que identifica a pessoa certificada.",
   email: "E-mail da pessoa certificada, quando o modelo exigir contato.",
-  cpf: "Documento individual da pessoa certificada; cada linha do lote deve ter um CPF proprio.",
-  cnpj: "Documento da empresa ou entidade juridica, quando o modelo exigir CNPJ.",
-  cpf_cnpj: "Documento aceito pelo modelo; informe CPF para pessoa fisica ou CNPJ para empresa.",
+  cpf: "Documento individual da pessoa certificada; cada linha do lote deve ter um CPF próprio.",
+  cnpj: "Documento da empresa ou entidade jurídica, quando o modelo exigir CNPJ.",
+  cpf_cnpj: "Documento aceito pelo modelo; informe CPF para pessoa física ou CNPJ para empresa.",
   rg: "Numero de identidade/RG da pessoa certificada. Se o modelo tiver UF separado, informe o estado no campo UF.",
   uf: "Estado emissor do RG/identidade; use a sigla com duas letras, como MG ou SP.",
-  generic_document: "Documento individual usado pelo modelo. Em lote, cada pessoa deve ter seu proprio documento.",
+  generic_document: "Documento individual usado pelo modelo. Em lote, cada pessoa deve ter seu próprio documento.",
   company: "Empresa vinculada ao certificado; normalmente fica igual para todo o lote.",
   city: "Cidade exibida no certificado; normalmente fica igual para todo o lote.",
   date: "Data exibida no certificado.",
   long_date: "Data por extenso exibida no certificado.",
-  month: "Mes exibido no certificado, por extenso.",
-  hours: "Carga horaria exibida no certificado; normalmente fica igual para todo o lote.",
-  period: "Periodo em que o curso ocorreu.",
+  month: "Mês exibido no certificado, por extenso.",
+  hours: "Carga horária exibida no certificado; normalmente fica igual para todo o lote.",
+  period: "Período em que o curso ocorreu.",
+  hours_with_unit: "Texto calculado a partir da carga horária, incluindo hora ou horas.",
+  hours_distribution: "Texto calculado para cursos acima de 8 horas, distribuindo no máximo 8 horas por dia.",
+  document_phrase: "Texto calculado a partir do CPF/documento. Fica vazio quando o documento não for informado.",
   course: "Nome do curso exibido no certificado.",
-  instructor: "Nome do instrutor ou responsavel exibido no certificado.",
-  system_code: "Codigo gerado automaticamente pelo sistema para validacao publica.",
-  shared: "Campo do modelo que sera preenchido no certificado.",
+  instructor: "Nome do instrutor ou responsável exibido no certificado.",
+  system_code: "Código gerado automaticamente pelo sistema para validação pública.",
+  shared: "Campo do modelo que será preenchido no certificado.",
 };
 
 const FIELD_LABEL_ALIASES: Record<string, string> = {
@@ -156,6 +183,9 @@ const FIELD_LABEL_ALIASES: Record<string, string> = {
   email: FIELD_LABELS.email,
   e_mail: FIELD_LABELS.email,
   empresa: FIELD_LABELS.company,
+  carga_horaria_com_unidade: FIELD_LABELS.hours_with_unit,
+  complemento_carga_horaria: FIELD_LABELS.hours_distribution,
+  periodo_carga_horaria: FIELD_LABELS.hours_distribution,
   hora: FIELD_LABELS.hours,
   horas: FIELD_LABELS.hours,
   id: FIELD_LABELS.rg,
@@ -166,6 +196,7 @@ const FIELD_LABEL_ALIASES: Record<string, string> = {
   name: FIELD_LABELS.recipient_name,
   nome: FIELD_LABELS.recipient_name,
   participante: FIELD_LABELS.recipient_name,
+  documento_participante_texto: FIELD_LABELS.document_phrase,
   periodo: FIELD_LABELS.period,
   rg: FIELD_LABELS.rg,
   titular: FIELD_LABELS.recipient_name,
@@ -193,6 +224,9 @@ const KIND_ALIASES: Record<TemplateFieldKind, string[]> = {
   month: ["mes", "month"],
   hours: ["hora", "horas", "carga_horaria"],
   period: ["periodo", "period"],
+  hours_with_unit: ["carga_horaria_com_unidade", "horas_com_unidade"],
+  hours_distribution: ["complemento_carga_horaria", "periodo_carga_horaria", "distribuicao_carga_horaria"],
+  document_phrase: ["documento_participante_texto", "texto_documento_participante"],
   course: ["curso", "course"],
   instructor: ["instrutor", "instructor"],
   system_code: ["cod", "codigo", "codigo_validacao"],
@@ -219,6 +253,12 @@ const MIRRORED_FIELD_KINDS = new Set<TemplateFieldKind>([
   "period",
   "course",
   "instructor",
+]);
+
+const CALCULATED_FIELD_KINDS = new Set<TemplateFieldKind>([
+  "document_phrase",
+  "hours_with_unit",
+  "hours_distribution",
 ]);
 
 export function getTemplateVariableLabel(variable: TemplateVariableIdentity) {
@@ -255,6 +295,9 @@ export function getTemplateFieldKind(variable: TemplateVariableIdentity): Templa
   const allTokens = new Set([...keyTokens, ...labelTokens]);
 
   if (isSystemCodeKey(key) || isSystemCodeKey(label)) return "system_code";
+  if (hasAlias(key, label, "document_phrase")) return "document_phrase";
+  if (hasAlias(key, label, "hours_with_unit")) return "hours_with_unit";
+  if (hasAlias(key, label, "hours_distribution")) return "hours_distribution";
   if (isLongDateField(variable)) return "long_date";
   if (isDateField(variable)) return "date";
 
@@ -347,7 +390,45 @@ export function isTemplateBatchPersonField(variable: TemplateVariableIdentity) {
 
 export function isTemplateBatchSharedField(variable: TemplateVariableIdentity) {
   const kind = getTemplateFieldKind(variable);
-  return kind !== "system_code" && !PER_PERSON_KINDS.has(kind);
+  return kind !== "system_code" && !CALCULATED_FIELD_KINDS.has(kind) && !PER_PERSON_KINDS.has(kind);
+}
+
+export function getTemplateVariableDefaultRequired(variable: TemplateVariableIdentity) {
+  return !isTemplateOptionalByRule(variable);
+}
+
+export function isTemplateVariableRequired(
+  variable: TemplateVariableIdentity & { required?: boolean },
+) {
+  return !isTemplateOptionalByRule(variable) && Boolean(variable.required);
+}
+
+export function isTemplateCalculatedField(variable: TemplateVariableIdentity) {
+  return CALCULATED_FIELD_KINDS.has(getTemplateFieldKind(variable));
+}
+
+export function applyCalculatedTemplateValues(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const next = { ...values };
+
+  for (const variable of variables) {
+    const kind = getTemplateFieldKind(variable);
+    if (kind === "document_phrase") {
+      next[variable.key] = buildParticipantDocumentText(variables, next);
+    }
+
+    if (kind === "hours_with_unit") {
+      next[variable.key] = buildHoursWithUnit(variables, next);
+    }
+
+    if (kind === "hours_distribution") {
+      next[variable.key] = buildHoursDistribution(variables, next);
+    }
+  }
+
+  return next;
 }
 
 export function dedupeTemplateFieldVariables<T extends TemplateVariableIdentity>(variables: T[]) {
@@ -432,20 +513,20 @@ export function validateTemplateFieldValue(variable: TemplateVariableIdentity, v
   if (!trimmed) return null;
 
   if (mode === "CPF") {
-    return onlyDigits(trimmed).length === 11 ? null : "CPF deve ter 11 digitos.";
+    return onlyDigits(trimmed).length === 11 ? null : "CPF deve ter 11 dígitos.";
   }
 
   if (mode === "CNPJ") {
-    return onlyDigits(trimmed).length === 14 ? null : "CNPJ deve ter 14 digitos.";
+    return onlyDigits(trimmed).length === 14 ? null : "CNPJ deve ter 14 dígitos.";
   }
 
   if (mode === "CPF_CNPJ") {
     const digits = onlyDigits(trimmed).length;
-    return digits === 11 || digits === 14 ? null : "Informe CPF com 11 digitos ou CNPJ com 14 digitos.";
+    return digits === 11 || digits === 14 ? null : "Informe CPF com 11 dígitos ou CNPJ com 14 dígitos.";
   }
 
   if (mode === "UF") {
-    return BRAZIL_UFS.has(normalizeUf(trimmed)) ? null : "UF deve ser uma sigla valida com 2 letras.";
+    return BRAZIL_UFS.has(normalizeUf(trimmed)) ? null : "UF deve ser uma sigla válida com 2 letras.";
   }
 
   if (mode === "RG") {
@@ -453,7 +534,7 @@ export function validateTemplateFieldValue(variable: TemplateVariableIdentity, v
     const alphanumeric = normalized.replace(/[^A-Z0-9]/g, "");
     const digits = onlyDigits(normalized);
     if (alphanumeric.length < 5 || digits.length < 4) {
-      return "Informe um RG/identidade valido para a pessoa.";
+      return "Informe um RG/identidade válido para a pessoa.";
     }
   }
 
@@ -495,6 +576,235 @@ export function normalizeComparableValue(value: string) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, " ");
+}
+
+function isTemplateOptionalByRule(variable: TemplateVariableIdentity) {
+  const kind = getTemplateFieldKind(variable);
+  const key = normalizeFieldKey(variable.key);
+  return kind === "cpf" || key === "doc" || CALCULATED_FIELD_KINDS.has(kind);
+}
+
+function buildParticipantDocumentText(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const candidate = findParticipantDocumentCandidate(variables, values);
+  if (!candidate) return "";
+
+  return `, portador(a) do ${candidate.label} ${candidate.value}`;
+}
+
+function findParticipantDocumentCandidate(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const candidates = variables
+    .filter((variable) => !isTemplateCalculatedField(variable))
+    .map((variable) => {
+      const value = getValueForVariable(variable, values);
+      return value ? { variable, value } : null;
+    })
+    .filter((item): item is { variable: TemplateVariableIdentity; value: string } => Boolean(item))
+    .filter(({ variable }) => {
+      const kind = getTemplateFieldKind(variable);
+      return kind === "cpf" || kind === "cpf_cnpj" || kind === "generic_document" || kind === "rg";
+    });
+
+  const preferred =
+    candidates.find(({ variable }) => getTemplateFieldKind(variable) === "cpf") ??
+    candidates.find(({ variable }) => normalizeFieldKey(variable.key) === "doc") ??
+    candidates[0];
+
+  if (!preferred) return null;
+
+  const kind = getTemplateFieldKind(preferred.variable);
+  const digits = onlyDigits(preferred.value);
+  if (kind === "cpf" || digits.length === 11) {
+    return { label: "CPF", value: formatCpf(digits) };
+  }
+
+  if (kind === "cpf_cnpj" && digits.length === 14) {
+    return { label: "CNPJ", value: formatCnpj(digits) };
+  }
+
+  if (kind === "rg") {
+    return { label: "RG", value: normalizeRg(preferred.value) };
+  }
+
+  return { label: "documento", value: preferred.value.trim() };
+}
+
+function buildHoursWithUnit(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const variable = variables.find((item) => getTemplateFieldKind(item) === "hours");
+  const value = variable ? getValueForVariable(variable, values) : "";
+  const cleanValue = normalizeHoursValue(value);
+  if (!cleanValue) return "";
+
+  const numeric = Number(cleanValue.replace(",", "."));
+  const unit = Number.isFinite(numeric) && numeric === 1 ? "hora" : "horas";
+  return `${cleanValue} ${unit}`;
+}
+
+function buildHoursDistribution(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const hourCount = findHourCount(variables, values);
+  if (!hourCount || hourCount <= 8) return "";
+
+  const startDate = findCourseStartDate(variables, values);
+  if (!startDate) return ", distribuída conforme cronograma do curso";
+
+  const dayCount = Math.ceil(hourCount / 8);
+  const dates = Array.from({ length: dayCount }, (_, index) => addDaysUtc(startDate, index));
+  return `, distribuída nos dias ${formatDateListPtBr(dates)}`;
+}
+
+function findHourCount(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const variable = variables.find((item) => getTemplateFieldKind(item) === "hours");
+  const value = variable ? getValueForVariable(variable, values) : "";
+  const cleanValue = normalizeHoursValue(value).replace(",", ".");
+  const parsed = Number(cleanValue);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function findCourseStartDate(
+  variables: TemplateVariableIdentity[],
+  values: Record<string, string>,
+) {
+  const dateVariables = variables.filter((variable) => {
+    const kind = getTemplateFieldKind(variable);
+    return kind === "date" || kind === "long_date";
+  });
+
+  for (const variable of dateVariables) {
+    const date = parseFlexibleDate(getValueForVariable(variable, values));
+    if (date) return date;
+  }
+
+  const periodVariable = variables.find((variable) => getTemplateFieldKind(variable) === "period");
+  const periodDate = periodVariable ? parseFlexibleDate(getValueForVariable(periodVariable, values)) : null;
+  if (periodDate) return periodDate;
+
+  const monthYear = periodVariable ? parseMonthYearPtBr(getValueForVariable(periodVariable, values)) : null;
+  if (monthYear) return new Date(Date.UTC(monthYear.year, monthYear.month - 1, 1));
+
+  return null;
+}
+
+function parseFlexibleDate(value: string) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return null;
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) return safeUtcDate(Number(isoMatch[1]), Number(isoMatch[2]), Number(isoMatch[3]));
+
+  const brMatch = trimmed.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);
+  if (brMatch) return safeUtcDate(Number(brMatch[3]), Number(brMatch[2]), Number(brMatch[1]));
+
+  const longMatch = normalizeComparableValue(trimmed).match(/^(\d{1,2}) de ([a-z]+) de (\d{4})$/);
+  if (longMatch) {
+    const month = monthNumberFromName(longMatch[2]);
+    return month ? safeUtcDate(Number(longMatch[3]), month, Number(longMatch[1])) : null;
+  }
+
+  const monthYear = parseMonthYearPtBr(trimmed);
+  return monthYear ? new Date(Date.UTC(monthYear.year, monthYear.month - 1, 1)) : null;
+}
+
+function parseMonthYearPtBr(value: string) {
+  const trimmed = String(value ?? "").trim();
+  if (!trimmed) return null;
+
+  const isoMonthMatch = trimmed.match(/^(\d{4})-(\d{2})$/);
+  if (isoMonthMatch) return safeMonthYear(Number(isoMonthMatch[1]), Number(isoMonthMatch[2]));
+
+  const normalized = normalizeComparableValue(trimmed);
+  const monthYearMatch = normalized.match(/^([a-z]+) de (\d{4})$/);
+  if (!monthYearMatch) return null;
+
+  const month = monthNumberFromName(monthYearMatch[1]);
+  return month ? { year: Number(monthYearMatch[2]), month } : null;
+}
+
+function safeUtcDate(year: number, month: number, day: number) {
+  if (!safeMonthYear(year, month) || day < 1) return null;
+
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+
+  return date;
+}
+
+function safeMonthYear(year: number, month: number) {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  return { year, month };
+}
+
+function monthNumberFromName(value: string) {
+  const normalized = normalizeComparableValue(value);
+  const index = MONTHS_PT.findIndex((month) => normalizeComparableValue(month) === normalized);
+  return index >= 0 ? index + 1 : null;
+}
+
+function addDaysUtc(date: Date, days: number) {
+  const next = new Date(date);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function formatDateListPtBr(dates: Date[]) {
+  if (!dates.length) return "";
+  const sameMonth = dates.every(
+    (date) =>
+      date.getUTCMonth() === dates[0].getUTCMonth() &&
+      date.getUTCFullYear() === dates[0].getUTCFullYear(),
+  );
+
+  if (sameMonth) {
+    return `${joinPtBr(dates.map((date) => String(date.getUTCDate())))} de ${MONTHS_PT[dates[0].getUTCMonth()]} de ${dates[0].getUTCFullYear()}`;
+  }
+
+  return joinPtBr(
+    dates.map((date) => `${date.getUTCDate()} de ${MONTHS_PT[date.getUTCMonth()]} de ${date.getUTCFullYear()}`),
+  );
+}
+
+function joinPtBr(parts: string[]) {
+  if (parts.length <= 1) return parts[0] ?? "";
+  if (parts.length === 2) return `${parts[0]} e ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")} e ${parts.at(-1)}`;
+}
+
+function normalizeHoursValue(value: string) {
+  return String(value ?? "")
+    .trim()
+    .replace(/\s*(h|hr|hrs|hora|horas)\.?$/i, "")
+    .trim();
+}
+
+function getValueForVariable(variable: TemplateVariableIdentity, values: Record<string, string>) {
+  const direct = values[variable.key]?.trim();
+  if (direct) return direct;
+
+  const normalizedKey = normalizeFieldKey(variable.key);
+  for (const [key, value] of Object.entries(values)) {
+    if (normalizeFieldKey(key) === normalizedKey && value.trim()) return value.trim();
+  }
+
+  return "";
 }
 
 export function onlyDigits(value: string) {
