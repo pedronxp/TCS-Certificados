@@ -1,27 +1,19 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Copy, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { useConfirmDialog } from "@/components/confirmation-dialog";
 
 export function TemplateActions({ id }: { id: string }) {
   const router = useRouter();
   const { confirm, confirmationDialog } = useConfirmDialog();
 
-  async function duplicate() {
-    const response = await fetch(`/api/templates/${id}`, { method: "POST" });
-    if (!response.ok) {
-      alert("Não foi possível duplicar o modelo.");
-      return;
-    }
-    router.refresh();
-  }
-
   async function remove() {
     const confirmed = await confirm({
       title: "Excluir modelo",
-      message: "Excluir este modelo? Certificados já emitidos podem impedir a exclusão.",
-      confirmLabel: "Excluir",
+      message:
+        "Tem certeza que deseja excluir este modelo?\n\nSe ele já foi usado em certificados ou lotes, o sistema pode bloquear a exclusão para preservar o histórico. Se a exclusão for permitida, o modelo deixa de aparecer na lista e não poderá mais ser usado para novas emissões.",
+      confirmLabel: "Excluir modelo",
       tone: "danger",
     });
     if (!confirmed) return;
@@ -38,9 +30,6 @@ export function TemplateActions({ id }: { id: string }) {
   return (
     <div className="flex gap-2">
       {confirmationDialog}
-      <button type="button" onClick={duplicate} className="icon-button" title="Duplicar modelo" aria-label="Duplicar modelo">
-        <Copy className="size-4" />
-      </button>
       <button type="button" onClick={remove} className="icon-button" title="Excluir modelo" aria-label="Excluir modelo">
         <Trash2 className="size-4" />
       </button>

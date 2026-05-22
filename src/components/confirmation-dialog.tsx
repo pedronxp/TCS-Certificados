@@ -81,6 +81,7 @@ export function useConfirmDialog() {
             fontSize: "0.875rem",
             lineHeight: 1.65,
             color: "var(--text-secondary)",
+            whiteSpace: "pre-line",
           }}
         >
           {state.message}
