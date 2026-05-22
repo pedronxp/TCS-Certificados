@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Document, Packer, Paragraph } from "docx";
 import JSZip from "jszip";
+import { PDFDocument } from "pdf-lib";
 import PizZip from "pizzip";
 import {
   renderCertificateHtml,
@@ -202,3 +203,246 @@ test("falls back to visual pages when DOCX to PDF conversion is unavailable", as
     console.warn = originalWarn;
   }
 });
+
+test("renders filled DOCX preview before using static visual PDF fallback", async () => {
+  const previousEnv = snapshotConverterEnv();
+  const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  disableOfficeConverters();
+
+  try {
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("Aluno {{nome}}"),
+            new Paragraph("Codigo {{COD}}"),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+    const output = await renderPdfBuffer({
+      template: {
+        name: "Suporte Basico de Vida V2",
+        width: 794,
+        height: 1123,
+        background: null,
+        layout: {
+          baseDocumentMode: "native",
+          baseFileName: "Suporte Basico de Vida V2.docx",
+          baseFileType: docxMimeType,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+          baseImageDataUrl: pngDataUrl,
+          basePages: [
+            {
+              index: 0,
+              width: 100,
+              height: 100,
+              imageDataUrl: pngDataUrl,
+            },
+          ],
+          elements: [],
+        },
+      },
+      values: { nome: "Maria Silva" },
+      verificationCode: "TCS-BR-2026-0101",
+      appUrl: "http://localhost:3000",
+    });
+
+    const pdf = await PDFDocument.load(output);
+    const size = pdf.getPage(0).getSize();
+
+    assert.equal(pdf.getPageCount(), 1);
+    assert.ok(size.width > 500);
+    assert.ok(size.height > 500);
+  } finally {
+    restoreConverterEnv(previousEnv);
+    console.warn = originalWarn;
+  }
+});
+
+test("uses configured filled visual fallback even when native DOCX converter returns expected page count", async () => {
+  const previousEnv = snapshotConverterEnv();
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  console.warn = () => {};
+
+  try {
+    const nativePdf = await PDFDocument.create();
+    nativePdf.addPage([100, 100]);
+    configureMockCloudConvertPdf(Buffer.from(await nativePdf.save()));
+
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("Aluno {{nome}}"),
+            new Paragraph("Codigo {{COD}}"),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+    const output = await renderPdfBuffer({
+      template: {
+        name: "Suporte Basico de Vida V2",
+        width: 794,
+        height: 1123,
+        background: null,
+        layout: {
+          baseDocumentMode: "native",
+          baseFileName: "Suporte Basico de Vida V2.docx",
+          baseFileType: docxMimeType,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+          baseImageDataUrl: pngDataUrl,
+          basePages: [
+            {
+              index: 0,
+              width: 794,
+              height: 1123,
+              imageDataUrl: pngDataUrl,
+            },
+          ],
+          elements: [],
+        },
+      },
+      values: { nome: "Maria Silva" },
+      verificationCode: "TCS-BR-2026-0102",
+      appUrl: "http://localhost:3000",
+    });
+
+    const pdf = await PDFDocument.load(output);
+    const size = pdf.getPage(0).getSize();
+
+    assert.equal(pdf.getPageCount(), 1);
+    assert.ok(size.width > 500);
+    assert.ok(size.height > 500);
+  } finally {
+    restoreConverterEnv(previousEnv);
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+function snapshotConverterEnv() {
+  return {
+    NODE_ENV: process.env.NODE_ENV,
+    GOTENBERG_URL: process.env.GOTENBERG_URL,
+    LIBREOFFICE_PATH: process.env.LIBREOFFICE_PATH,
+    CLOUDCONVERT_API_KEY: process.env.CLOUDCONVERT_API_KEY,
+    CLOUDCONVERT_API_BASE_URL: process.env.CLOUDCONVERT_API_BASE_URL,
+    CLOUDCONVERT_SYNC_API_BASE_URL: process.env.CLOUDCONVERT_SYNC_API_BASE_URL,
+    MICROSOFT_GRAPH_TENANT_ID: process.env.MICROSOFT_GRAPH_TENANT_ID,
+    MICROSOFT_GRAPH_CLIENT_ID: process.env.MICROSOFT_GRAPH_CLIENT_ID,
+    MICROSOFT_GRAPH_CLIENT_SECRET: process.env.MICROSOFT_GRAPH_CLIENT_SECRET,
+    MICROSOFT_GRAPH_DRIVE_ID: process.env.MICROSOFT_GRAPH_DRIVE_ID,
+    MICROSOFT_GRAPH_USER_ID: process.env.MICROSOFT_GRAPH_USER_ID,
+  };
+}
+
+function disableOfficeConverters() {
+  process.env.NODE_ENV = "production";
+  delete process.env.GOTENBERG_URL;
+  delete process.env.LIBREOFFICE_PATH;
+  delete process.env.CLOUDCONVERT_API_KEY;
+  delete process.env.CLOUDCONVERT_API_BASE_URL;
+  delete process.env.CLOUDCONVERT_SYNC_API_BASE_URL;
+  delete process.env.MICROSOFT_GRAPH_TENANT_ID;
+  delete process.env.MICROSOFT_GRAPH_CLIENT_ID;
+  delete process.env.MICROSOFT_GRAPH_CLIENT_SECRET;
+  delete process.env.MICROSOFT_GRAPH_DRIVE_ID;
+  delete process.env.MICROSOFT_GRAPH_USER_ID;
+}
+
+function restoreConverterEnv(env: ReturnType<typeof snapshotConverterEnv>) {
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+function configureMockCloudConvertPdf(pdfBuffer: Buffer) {
+  process.env.NODE_ENV = "production";
+  delete process.env.GOTENBERG_URL;
+  delete process.env.LIBREOFFICE_PATH;
+  process.env.CLOUDCONVERT_API_KEY = "test-key";
+  process.env.CLOUDCONVERT_API_BASE_URL = "https://api.example.test/v2";
+  process.env.CLOUDCONVERT_SYNC_API_BASE_URL = "https://sync.example.test/v2";
+  delete process.env.MICROSOFT_GRAPH_TENANT_ID;
+  delete process.env.MICROSOFT_GRAPH_CLIENT_ID;
+  delete process.env.MICROSOFT_GRAPH_CLIENT_SECRET;
+  delete process.env.MICROSOFT_GRAPH_DRIVE_ID;
+  delete process.env.MICROSOFT_GRAPH_USER_ID;
+
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+
+    if (url === "https://api.example.test/v2/jobs") {
+      assert.equal(init?.method, "POST");
+      return jsonResponse({
+        data: {
+          id: "job-docx",
+          status: "waiting",
+          tasks: [
+            {
+              id: "task-upload",
+              name: "import-docx",
+              operation: "import/upload",
+              status: "waiting",
+              result: {
+                form: {
+                  url: "https://upload.example.test",
+                  parameters: {},
+                },
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    if (url === "https://upload.example.test") {
+      assert.equal(init?.method, "POST");
+      assert.ok(init?.body instanceof FormData);
+      return new Response(null, { status: 201 });
+    }
+
+    if (url === "https://sync.example.test/v2/jobs/job-docx") {
+      return jsonResponse({
+        data: {
+          id: "job-docx",
+          status: "finished",
+          tasks: [
+            {
+              id: "task-export",
+              name: "export-pdf",
+              operation: "export/url",
+              status: "finished",
+              result: {
+                files: [{ filename: "certificate.pdf", url: "https://download.example.test/docx.pdf" }],
+              },
+            },
+          ],
+        },
+      });
+    }
+
+    if (url === "https://download.example.test/docx.pdf") {
+      return new Response(pdfBuffer);
+    }
+
+    throw new Error(`Unexpected fetch: ${url}`);
+  }) as typeof fetch;
+}
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json" },
+  });
+}

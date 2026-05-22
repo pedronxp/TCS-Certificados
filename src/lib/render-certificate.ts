@@ -12,6 +12,7 @@ import {
   type NativeCertificateFileType,
 } from "@/lib/certificate-output-format";
 import { convertDocxToPdfWithCloudConvert, convertOfficeToPdfWithCloudConvert as convertOfficeToPdfWithCloudConvertCloud } from "@/lib/cloudconvert";
+import { buildDocxVisualPreview } from "@/lib/docx-preview-service";
 import { convertDocxToPdfWithGotenberg, convertOfficeToPdfWithGotenberg } from "@/lib/gotenberg";
 import { convertDocxToPdfBuffer, convertOfficeToPdfBuffer } from "@/lib/libreoffice";
 import { convertDocxToPdfWithMicrosoftGraph } from "@/lib/microsoft-graph";
@@ -261,30 +262,24 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
   const docxBuffer = renderDocxFromBaseTemplate(input, layout);
   const expectedPageCount = getExpectedPdfPageCount(layout);
   const nativePdf = await convertDocxToPdfWithFallbacks(docxBuffer);
+  let visualPdf: Buffer | null = null;
 
-  if (!nativePdf) return null;
+  if (hasRenderableVisualPdfFallback(layout)) {
+    visualPdf = await renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
+    if (visualPdf) return visualPdf;
+  }
+
+  if (!nativePdf) {
+    return renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
+  }
 
   const nativePageCount = await getPdfPageCount(nativePdf);
   if (!nativePageCount || nativePageCount === expectedPageCount) {
     return nativePdf;
   }
 
-  const compactDocxBuffer = compactDocxForPdfConversion(docxBuffer);
-  if (!compactDocxBuffer) return nativePdf;
-
-  const compactPdf = await convertDocxToPdfWithFallbacks(compactDocxBuffer);
-  if (!compactPdf) return nativePdf;
-
-  const compactPageCount = await getPdfPageCount(compactPdf);
-  if (!compactPageCount) return nativePdf;
-
-  return isBetterPdfPageCount({
-    candidatePageCount: compactPageCount,
-    currentPageCount: nativePageCount,
-    expectedPageCount,
-  })
-    ? compactPdf
-    : nativePdf;
+  visualPdf ??= await renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
+  return visualPdf ?? nativePdf;
 }
 
 async function convertDocxToPdfWithFallbacks(docxBuffer: Buffer) {
@@ -310,21 +305,6 @@ function getExpectedPdfPageCount(layout: TemplateLayout) {
   return Math.max(1, basePageCount, elementPageCount);
 }
 
-function isBetterPdfPageCount({
-  candidatePageCount,
-  currentPageCount,
-  expectedPageCount,
-}: {
-  candidatePageCount: number;
-  currentPageCount: number;
-  expectedPageCount: number;
-}) {
-  if (candidatePageCount === expectedPageCount) return true;
-  if (currentPageCount === expectedPageCount) return false;
-
-  return Math.abs(candidatePageCount - expectedPageCount) < Math.abs(currentPageCount - expectedPageCount);
-}
-
 async function getPdfPageCount(pdfBuffer: Buffer) {
   try {
     const pdf = await PDFDocument.load(pdfBuffer);
@@ -334,48 +314,38 @@ async function getPdfPageCount(pdfBuffer: Buffer) {
   }
 }
 
-function compactDocxForPdfConversion(docxBuffer: Buffer) {
-  const zip = new PizZip(docxBuffer);
-  const documentXml = zip.file("word/document.xml");
-  if (!documentXml) return null;
-
-  const xml = documentXml.asText();
-  const compactedXml = xml.replace(/<w:pgMar\b[^>]*\/>/g, (tag) =>
-    clampTwipAttribute(
-      clampTwipAttribute(
-        clampTwipAttribute(
-          clampTwipAttribute(tag, "top", 360),
-          "bottom",
-          360,
-        ),
-        "header",
-        240,
-      ),
-      "footer",
-      240,
-    ),
-  );
-
-  if (compactedXml === xml) return null;
-
-  zip.file("word/document.xml", compactedXml);
-  return Buffer.from(zip.generate({ type: "nodebuffer" }));
-}
-
-function clampTwipAttribute(tag: string, attribute: string, maxValue: number) {
-  return tag.replace(new RegExp(`w:${attribute}="(\\d+)"`, "g"), (match, value: string) => {
-    const current = Number(value);
-    return Number.isFinite(current) && current > maxValue
-      ? `w:${attribute}="${maxValue}"`
-      : match;
-  });
-}
-
 async function renderPdfFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const pptxBuffer = await renderPptxFromBaseTemplate(input, layout);
   return convertNativePptxToPdfBuffer(pptxBuffer, layout, {
     preferCloudConvertOffice: true,
   });
+}
+
+async function renderPdfFromRenderedNativeDocxVisualTemplate(
+  input: RenderInput,
+  layout: TemplateLayout,
+  docxBuffer: Buffer,
+) {
+  try {
+    const preview = await buildDocxVisualPreview(docxBuffer);
+    const pages = preview.pages
+      .filter((page) => Boolean(page.imageDataUrl))
+      .map((page) => ({ ...page, border: undefined }));
+    if (!pages.length) return null;
+
+    return renderPdfFromVisualBaseTemplate(input, {
+      ...layout,
+      basePages: pages,
+      baseImageDataUrl: pages[0]?.imageDataUrl,
+      baseRenderDataUrl: pages[0]?.imageDataUrl,
+      baseRenderFileType: "image/png",
+      baseRenderEngine: preview.imageEngine,
+      basePageBorder: undefined,
+    });
+  } catch (error) {
+    console.warn("Fallback visual do DOCX preenchido indisponivel; usando alternativas estaticas.", error);
+    return null;
+  }
 }
 
 async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
