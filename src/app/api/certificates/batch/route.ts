@@ -10,6 +10,7 @@ import {
   validateSingleCompanyAndDate,
 } from "@/lib/batch-certificate-validation";
 import { failStaleBatchJobs, getBatchJob, processBatchJobChunk, startBatchJob } from "@/lib/batch-jobs";
+import { normalizeCertificateOutputMode } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
 
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
   const uploadedFile = file instanceof File && file.size > 0 && Boolean(file.name) ? file : null;
   const hasUploadedFile = Boolean(uploadedFile);
   const isTest = formData.get("isTest") === "true";
+  const outputMode = normalizeCertificateOutputMode(formData.get("outputMode"));
 
   const template = await prisma.certificateTemplate.findUnique({
     where: { id: templateId },
@@ -75,7 +77,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset, isTest });
+    const job = await startBatchJob({ templateId, rows, issuedById: user.id, lineOffset, isTest, outputMode });
 
     return NextResponse.json({
       jobId: job.id,
@@ -125,6 +127,7 @@ export async function GET(request: Request) {
     errors: Array.isArray(job.errors) ? job.errors : [],
     progress,
     templateName: job.template.name,
+    outputMode: job.outputMode,
   });
 }
 

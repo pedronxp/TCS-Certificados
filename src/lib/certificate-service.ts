@@ -16,10 +16,14 @@ import {
 import { deleteCertificateFiles, uploadCertificateFile } from "@/lib/supabase";
 import { randomUUID } from "node:crypto";
 import {
+  normalizeCertificateOutputMode,
+  type CertificateOutputMode,
+} from "@/lib/certificate-output-format";
+import {
   buildVerificationTemplateValues,
+  findFirstAvailableVerificationSequence,
   generateVerificationCode,
   isSystemCertificateVariableKey,
-  parseVerificationSequence,
 } from "@/lib/verification-code";
 
 const CERTIFICATE_SEQUENCE_ID = "global";
@@ -30,12 +34,14 @@ export async function issueCertificate({
   issuedById,
   batchId,
   isTest = false,
+  outputMode = "EDITABLE",
 }: {
   templateId: string;
   values: Record<string, string>;
   issuedById: string;
   batchId?: string;
   isTest?: boolean;
+  outputMode?: CertificateOutputMode;
 }) {
   const template = await prisma.certificateTemplate.findUnique({
     where: { id: templateId },
@@ -73,6 +79,7 @@ export async function issueCertificate({
   const recipientName = findValue(normalizedValues, ["nome", "name", "participante", "aluno", "titular"]) || "Sem nome";
   const recipientEmail = findValue(normalizedValues, ["email", "e_mail"]) || undefined;
   const recipientDocument = findDocumentValue(normalizedValues);
+  const normalizedOutputMode = normalizeCertificateOutputMode(outputMode);
 
   const renderInput = { template, values: normalizedValues.original, verificationCode, appUrl };
   const nativeFile = await renderNativeCertificateBuffer(renderInput);
@@ -104,6 +111,7 @@ export async function issueCertificate({
       issuedAt,
       deleteAt: buildDefaultCertificateDeleteAt(issuedAt),
       isTest,
+      outputMode: normalizedOutputMode,
       template: { connect: { id: templateId } },
       issuedBy: { connect: { id: issuedById } },
       ...(batchId ? { batch: { connect: { id: batchId } } } : {}),
@@ -229,13 +237,64 @@ export async function resetCertificateDatabase() {
   };
 }
 
+export async function deleteCertificateIssues(ids: string[]) {
+  const uniqueIds = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+  if (!uniqueIds.length) return 0;
+
+  const issues = await prisma.certificateIssue.findMany({
+    where: { id: { in: uniqueIds } },
+    select: {
+      id: true,
+      recipientId: true,
+      files: { select: { storagePath: true } },
+    },
+  });
+
+  if (!issues.length) return 0;
+
+  const storagePaths = issues.flatMap((issue) =>
+    issue.files.map((file) => file.storagePath).filter(Boolean) as string[],
+  );
+  const issueIds = issues.map((issue) => issue.id);
+  const recipientIds = Array.from(new Set(issues.map((issue) => issue.recipientId)));
+
+  await removeStoredFiles(storagePaths);
+
+  const result = await prisma.$transaction(async (tx) => {
+    const deletedIssues = await tx.certificateIssue.deleteMany({
+      where: { id: { in: issueIds } },
+    });
+    const deletedRecipients = await tx.certificateRecipient.deleteMany({
+      where: {
+        id: { in: recipientIds },
+        issues: { none: {} },
+      },
+    });
+
+    return {
+      issues: deletedIssues.count,
+      recipients: deletedRecipients.count,
+    };
+  });
+
+  return result.issues;
+}
+
 async function reserveNextVerificationCode(issuedAt: Date) {
+  const existingIssues = await prisma.certificateIssue.findMany({
+    where: { verificationCode: { startsWith: "TCS-BR-" } },
+    select: { verificationCode: true },
+  });
+  const nextSequence = findFirstAvailableVerificationSequence(
+    existingIssues.map((issue) => issue.verificationCode),
+  );
+
   const sequence = await prisma.certificateSequence.upsert({
     where: { id: CERTIFICATE_SEQUENCE_ID },
-    update: { value: { increment: 1 } },
+    update: { value: nextSequence },
     create: {
       id: CERTIFICATE_SEQUENCE_ID,
-      value: await findHighestExistingVerificationSequence() + 1,
+      value: nextSequence,
     },
     select: { value: true },
   });
@@ -249,18 +308,6 @@ function generateTestVerificationCode(issuedAt: Date) {
     .replace(/[-:]/g, "")
     .replace(/\.\d{3}Z$/, "Z");
   return `TESTE-${timestamp}-${randomUUID().slice(0, 8).toUpperCase()}`;
-}
-
-async function findHighestExistingVerificationSequence() {
-  const existingIssues = await prisma.certificateIssue.findMany({
-    where: { verificationCode: { startsWith: "TCS-BR-" } },
-    select: { verificationCode: true },
-  });
-
-  return existingIssues.reduce((highestSequence, issue) => {
-    const sequence = parseVerificationSequence(issue.verificationCode);
-    return sequence && sequence > highestSequence ? sequence : highestSequence;
-  }, 0);
 }
 
 async function renderPdfBufferSafely(input: RenderInput) {

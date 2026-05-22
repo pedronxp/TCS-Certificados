@@ -2,6 +2,11 @@ import { templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-lay
 
 export type NativeCertificateFileType = "DOCX" | "PPTX";
 export type CertificateFileType = "PDF" | NativeCertificateFileType;
+export type CertificateOutputMode = "EDITABLE" | "NON_EDITABLE";
+
+export const DEFAULT_CERTIFICATE_OUTPUT_MODE: CertificateOutputMode = "EDITABLE";
+export const NON_EDITABLE_NATIVE_DOWNLOAD_ERROR =
+  "Este certificado foi gerado como versao nao editavel. Baixe o PDF final.";
 
 export function getTemplateNativeFileType(layout: unknown): NativeCertificateFileType {
   const parsed = templateLayoutSchema.safeParse(layout);
@@ -37,6 +42,28 @@ export function normalizeCertificateFileType(type: string | null | undefined): C
   const upperType = String(type ?? "").toUpperCase();
   if (upperType === "DOCX" || upperType === "PPTX") return upperType;
   return "PDF";
+}
+
+export function normalizeCertificateOutputMode(mode: unknown): CertificateOutputMode {
+  const upperMode = String(mode ?? "").trim().toUpperCase();
+  return upperMode === "NON_EDITABLE" ? "NON_EDITABLE" : DEFAULT_CERTIFICATE_OUTPUT_MODE;
+}
+
+export function canDownloadCertificateFile(
+  outputMode: CertificateOutputMode | null | undefined,
+  type: CertificateFileType,
+) {
+  return normalizeCertificateOutputMode(outputMode) !== "NON_EDITABLE" || type === "PDF";
+}
+
+export function isNonEditableCertificateOutputMode(outputMode: CertificateOutputMode | null | undefined) {
+  return normalizeCertificateOutputMode(outputMode) === "NON_EDITABLE";
+}
+
+export function certificateOutputModeLabel(outputMode: CertificateOutputMode | null | undefined) {
+  return isNonEditableCertificateOutputMode(outputMode)
+    ? "PDF final nao editavel"
+    : "PDF + arquivo editavel";
 }
 
 function isDocxBaseLayout(layout: TemplateLayout) {

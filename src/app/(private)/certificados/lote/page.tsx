@@ -2,6 +2,7 @@ import { BatchForm } from "@/components/certificates/batch-form";
 import { requireAdmin } from "@/lib/auth";
 import { failStaleBatchJobs } from "@/lib/batch-jobs";
 import { BATCH_STATUS_LABELS } from "@/lib/batch-status";
+import { certificateOutputModeLabel } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import type { CertificateBatchStatus } from "@prisma/client";
 import type { Metadata } from "next";
@@ -110,6 +111,7 @@ export default async function BatchCertificatePage() {
                 <th>Empresa</th>
                 <th>Data cert.</th>
                 <th>Status</th>
+                <th>Arquivo</th>
                 <th>Progresso</th>
                 <th>Erros</th>
                 <th>Operador</th>
@@ -127,6 +129,9 @@ export default async function BatchCertificatePage() {
                     <td>{batch.issuedDate}</td>
                     <td>
                       <span className={statusInfo.cls}>{statusInfo.label}</span>
+                    </td>
+                    <td>
+                      <span className="chip chip-brand">{certificateOutputModeLabel(batch.outputMode)}</span>
                     </td>
                     <td>
                       <span style={{ fontVariantNumeric: "tabular-nums" }}>
@@ -148,7 +153,7 @@ export default async function BatchCertificatePage() {
               })}
               {!batches.length && (
                 <tr>
-                  <td colSpan={8} style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
+                  <td colSpan={9} style={{ textAlign: "center", color: "var(--text-muted)", padding: "2rem" }}>
                     Nenhum lote gerado ainda.
                   </td>
                 </tr>

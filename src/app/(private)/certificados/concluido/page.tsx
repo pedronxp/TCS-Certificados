@@ -6,7 +6,12 @@ import { Download, FileText, Files, History, ShieldCheck } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { WhatsappDocumentShareButton } from "@/components/certificates/whatsapp-document-share-button";
 import { requireUser } from "@/lib/auth";
-import { getTemplateNativeFileType } from "@/lib/certificate-output-format";
+import {
+  canDownloadCertificateFile,
+  certificateOutputModeLabel,
+  getTemplateNativeFileType,
+  type CertificateOutputMode,
+} from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = { title: "Certificado pronto - TCS Certificados" };
@@ -37,13 +42,17 @@ export default async function CertificateCompletePage({
         id: true,
         verificationCode: true,
         isTest: true,
+        outputMode: true,
+        values: true,
         recipient: { select: { name: true } },
         template: { select: { name: true, layout: true } },
       },
     });
 
     if (!issue) notFound();
-    const nativeType = getTemplateNativeFileType(issue.template.layout).toLowerCase();
+    const nativeFileType = getTemplateNativeFileType(issue.template.layout);
+    const nativeType = nativeFileType.toLowerCase();
+    const canDownloadNative = canDownloadCertificateFile(issue.outputMode, nativeFileType);
     const pdfHref = `/api/certificates/${issue.id}/download/pdf?regenerate=1`;
     const whatsappMessage = issue.isTest
       ? `O certificado de teste de ${issue.recipient.name}, referente ao curso ${issue.template.name}, foi gerado para conferência. Vou enviar o arquivo em seguida.`
@@ -57,13 +66,16 @@ export default async function CertificateCompletePage({
         details={[
           { label: "Participante", value: issue.recipient.name },
           { label: "Modelo", value: issue.template.name },
+          { label: "Arquivo", value: certificateOutputModeLabel(issue.outputMode) },
           { label: issue.isTest ? "Modo" : "Código", value: issue.isTest ? "Emissão de teste" : issue.verificationCode },
         ]}
+        recommendation={getRecommendationText(issue.outputMode)}
       >
         <DownloadPanel
           pdfHref={pdfHref}
-          nativeHref={`/api/certificates/${issue.id}/download/${nativeType}`}
-          nativeLabel={nativeType.toUpperCase()}
+          nativeHref={canDownloadNative ? `/api/certificates/${issue.id}/download/${nativeType}` : null}
+          nativeLabel={nativeFileType}
+          phoneNumber={findWhatsappPhone(issue.values)}
           whatsappFileName={getPdfFilename(issue.recipient.name, issue.verificationCode)}
           whatsappMessage={whatsappMessage}
         />
@@ -80,6 +92,7 @@ export default async function CertificateCompletePage({
       select: {
         id: true,
         isTest: true,
+        outputMode: true,
         total: true,
         created: true,
         template: { select: { name: true, layout: true } },
@@ -88,6 +101,7 @@ export default async function CertificateCompletePage({
           select: {
             id: true,
             verificationCode: true,
+            values: true,
             recipient: { select: { name: true } },
           },
         },
@@ -95,7 +109,9 @@ export default async function CertificateCompletePage({
     });
 
     if (!batch) notFound();
-    const nativeType = getTemplateNativeFileType(batch.template.layout).toLowerCase();
+    const nativeFileType = getTemplateNativeFileType(batch.template.layout);
+    const nativeType = nativeFileType.toLowerCase();
+    const canDownloadNative = canDownloadCertificateFile(batch.outputMode, nativeFileType);
 
     return (
       <CompletionShell
@@ -104,9 +120,11 @@ export default async function CertificateCompletePage({
         badge={batch.isTest ? "Teste" : "Lote oficial"}
         details={[
           { label: "Modelo", value: batch.template.name },
+          { label: "Arquivo", value: certificateOutputModeLabel(batch.outputMode) },
           { label: "Gerados", value: `${batch.created}/${batch.total}` },
           { label: "Modo", value: batch.isTest ? "Emissão de teste" : "Emissão oficial" },
         ]}
+        recommendation={getRecommendationText(batch.outputMode)}
       >
         <section className="dark-card-flat" style={{ overflow: "hidden", textAlign: "left" }}>
           <div className="dark-card-header">
@@ -128,11 +146,14 @@ export default async function CertificateCompletePage({
                   </div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                     <DownloadButton href={pdfHref} label="PDF" />
-                    <DownloadButton href={`/api/certificates/${issue.id}/download/${nativeType}`} label={nativeType.toUpperCase()} />
+                    {canDownloadNative ? (
+                      <DownloadButton href={`/api/certificates/${issue.id}/download/${nativeType}`} label={nativeFileType} />
+                    ) : null}
                     <WhatsappDocumentShareButton
                       fileUrl={pdfHref}
                       fileName={getPdfFilename(issue.recipient.name, issue.verificationCode)}
                       message={whatsappMessage}
+                      phoneNumber={findWhatsappPhone(issue.values)}
                     />
                   </div>
                 </div>
@@ -152,12 +173,14 @@ function CompletionShell({
   subtitle,
   badge,
   details,
+  recommendation,
   children,
 }: {
   title: string;
   subtitle: string;
   badge: string;
   details: Array<{ label: string; value: string }>;
+  recommendation: string;
   children: ReactNode;
 }) {
   return (
@@ -190,7 +213,7 @@ function CompletionShell({
         </div>
 
         <p style={{ maxWidth: "46rem", margin: "1.25rem auto 0", color: "var(--text-secondary)", fontSize: "0.92rem", lineHeight: 1.6 }}>
-          Recomendação: baixe o PDF ou o arquivo editável agora e envie imediatamente. Assim você evita confusão de versões, perda de prazo ou esquecimento depois da emissão.
+          {recommendation}
         </p>
       </section>
       {children}
@@ -212,12 +235,14 @@ function DownloadPanel({
   pdfHref,
   nativeHref,
   nativeLabel,
+  phoneNumber,
   whatsappFileName,
   whatsappMessage,
 }: {
   pdfHref: string;
-  nativeHref: string;
+  nativeHref: string | null;
   nativeLabel: string;
+  phoneNumber: string | null;
   whatsappFileName: string;
   whatsappMessage: string;
 }) {
@@ -225,11 +250,12 @@ function DownloadPanel({
     <section className="dark-card-flat" style={{ padding: "1rem" }}>
       <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
         <DownloadButton href={pdfHref} label="PDF" large />
-        <DownloadButton href={nativeHref} label={nativeLabel} large />
+        {nativeHref ? <DownloadButton href={nativeHref} label={nativeLabel} large /> : null}
         <WhatsappDocumentShareButton
           fileUrl={pdfHref}
           fileName={whatsappFileName}
           message={whatsappMessage}
+          phoneNumber={phoneNumber}
           large
         />
       </div>
@@ -271,8 +297,36 @@ function buildValidationUrl(code: string) {
   return `${appUrl.replace(/\/$/, "")}/validar/${encodeURIComponent(code)}`;
 }
 
+function getRecommendationText(outputMode: CertificateOutputMode) {
+  if (outputMode === "NON_EDITABLE") {
+    return "Recomendacao: baixe o PDF final agora e envie esse arquivo como versao fechada do certificado. A validacao por codigo/QR continua sendo a prova oficial de autenticidade.";
+  }
+
+  return "Recomendacao: baixe o PDF ou o arquivo editavel agora e envie imediatamente. Assim voce evita confusao de versoes, perda de prazo ou esquecimento depois da emissao.";
+}
+
 function getPdfFilename(recipientName: string, verificationCode: string) {
   return `${sanitizeFilenamePart(recipientName)}-${sanitizeFilenamePart(verificationCode)}.pdf`;
+}
+
+function findWhatsappPhone(values: unknown) {
+  if (!values || typeof values !== "object" || Array.isArray(values)) return null;
+
+  const issueValues = values as Record<string, unknown>;
+  for (const [key, value] of Object.entries(issueValues)) {
+    const normalizedKey = normalizeKey(key);
+    if (
+      normalizedKey.includes("whatsapp") ||
+      normalizedKey.includes("telefone") ||
+      normalizedKey.includes("celular") ||
+      normalizedKey === "phone"
+    ) {
+      const phone = String(value ?? "").trim();
+      if (phone) return phone;
+    }
+  }
+
+  return null;
 }
 
 function sanitizeFilenamePart(value: string) {
@@ -284,4 +338,14 @@ function sanitizeFilenamePart(value: string) {
       .replace(/\s+/g, " ")
       .trim() || "certificado"
   );
+}
+
+function normalizeKey(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
 }

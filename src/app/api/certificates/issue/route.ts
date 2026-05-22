@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { issueCertificate } from "@/lib/certificate-service";
+import { normalizeCertificateOutputMode } from "@/lib/certificate-output-format";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -15,6 +16,7 @@ export async function POST(request: Request) {
       values: body.values ?? {},
       issuedById: user.id,
       isTest: Boolean(body.isTest),
+      outputMode: normalizeCertificateOutputMode(body.outputMode),
     });
     return NextResponse.json(issue, { status: 201 });
   } catch (error) {

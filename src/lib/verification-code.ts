@@ -21,9 +21,25 @@ export async function generateNextVerificationCode(
 ) {
   const year = getBrazilYear(issuedAt);
   const existingCodes = await findExistingCodes();
-  const nextSequence = findHighestSequence(existingCodes) + 1;
+  const nextSequence = findFirstAvailableVerificationSequence(existingCodes);
 
   return formatVerificationCode(year, nextSequence);
+}
+
+export function findFirstAvailableVerificationSequence(codes: string[]) {
+  const usedSequences = new Set<number>();
+
+  for (const code of codes) {
+    const sequence = parseVerificationSequence(code);
+    if (sequence) usedSequences.add(sequence);
+  }
+
+  let nextSequence = 1;
+  while (usedSequences.has(nextSequence)) {
+    nextSequence += 1;
+  }
+
+  return nextSequence;
 }
 
 export function parseVerificationSequence(code: string) {
@@ -83,13 +99,6 @@ export function normalizeVerificationCode(value: string | string[] | null | unde
   }
 
   return trimmed.replace(/\s+/g, "").toUpperCase();
-}
-
-function findHighestSequence(codes: string[]) {
-  return codes.reduce((highestSequence, code) => {
-    const sequence = parseVerificationSequence(code);
-    return sequence && sequence > highestSequence ? sequence : highestSequence;
-  }, 0);
 }
 
 function formatVerificationCode(year: string, sequence: number) {

@@ -2,9 +2,11 @@ import { NextResponse } from "next/server";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
 import {
+  canDownloadCertificateFile,
   certificateFileExtension,
   certificateFileMimeType,
   isOfficeBaseLayout,
+  NON_EDITABLE_NATIVE_DOWNLOAD_ERROR,
   normalizeCertificateFileType,
   type CertificateFileType,
 } from "@/lib/certificate-output-format";
@@ -92,6 +94,15 @@ export async function GET(
       { status: 410 },
     );
   }
+  if (!canDownloadCertificateFile(issue.outputMode, fileType)) {
+    return NextResponse.json(
+      {
+        error: NON_EDITABLE_NATIVE_DOWNLOAD_ERROR,
+        code: "CERTIFICATE_NATIVE_DOWNLOAD_BLOCKED",
+      },
+      { status: 403 },
+    );
+  }
 
   const existingFile = issue.files[0] ?? null;
   const storedContent = (existingFile?.content?.length ? Buffer.from(existingFile.content) : null)
@@ -158,6 +169,7 @@ async function findIssueForPublicDownload(code: string, type: CertificateFileTyp
       verificationCode: true,
       values: true,
       status: true,
+      outputMode: true,
       deleteAt: true,
       recipient: { select: { name: true, document: true } },
       template: {

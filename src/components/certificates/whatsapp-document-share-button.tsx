@@ -7,6 +7,7 @@ type WhatsappDocumentShareButtonProps = {
   fileUrl: string;
   fileName: string;
   message: string;
+  phoneNumber?: string | null;
   large?: boolean;
 };
 
@@ -18,6 +19,7 @@ export function WhatsappDocumentShareButton({
   fileUrl,
   fileName,
   message,
+  phoneNumber,
   large = false,
 }: WhatsappDocumentShareButtonProps) {
   const [status, setStatus] = useState("");
@@ -47,21 +49,30 @@ export function WhatsappDocumentShareButton({
         files: [file],
       };
       const navigatorWithShare = navigator as NavigatorWithFileShare;
+      const canShareFiles =
+        typeof navigatorWithShare.canShare === "function" &&
+        navigatorWithShare.canShare(shareData);
 
-      if (
-        navigatorWithShare.share &&
-        (!navigatorWithShare.canShare || navigatorWithShare.canShare(shareData))
-      ) {
-        await navigatorWithShare.share(shareData);
-        fallbackWindow?.close();
-        setStatus("Arquivo enviado para compartilhamento.");
-        return;
+      if (navigatorWithShare.share && canShareFiles) {
+        try {
+          await navigatorWithShare.share(shareData);
+          fallbackWindow?.close();
+          setStatus("Arquivo enviado para compartilhamento.");
+          return;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            fallbackWindow?.close();
+            setStatus("Compartilhamento cancelado.");
+            return;
+          }
+        }
       }
 
       downloadFile(blob, fileName);
       openWhatsapp(
         `${message}\n\nO PDF foi baixado neste dispositivo. Anexe o arquivo "${fileName}" nesta conversa do WhatsApp.`,
         fallbackWindow,
+        phoneNumber,
       );
       setStatus("PDF baixado. Anexe o arquivo na conversa do WhatsApp.");
     } catch (error) {
@@ -114,12 +125,23 @@ function downloadFile(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function openWhatsapp(message: string, targetWindow: Window | null) {
-  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+function openWhatsapp(message: string, targetWindow: Window | null, phoneNumber?: string | null) {
+  const phone = normalizeWhatsappPhone(phoneNumber);
+  const whatsappUrl = phone
+    ? `https://wa.me/${phone}?text=${encodeURIComponent(message)}`
+    : `https://wa.me/?text=${encodeURIComponent(message)}`;
 
   if (targetWindow) {
     targetWindow.location.href = whatsappUrl;
   } else {
     window.location.href = whatsappUrl;
   }
+}
+
+function normalizeWhatsappPhone(value: string | null | undefined) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("55")) return digits;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  return digits;
 }

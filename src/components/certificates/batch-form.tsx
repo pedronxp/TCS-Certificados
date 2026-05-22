@@ -42,6 +42,7 @@ type BatchTemplate = {
 };
 
 type BatchVariable = BatchTemplate["variables"][number];
+type CertificateOutputMode = "EDITABLE" | "NON_EDITABLE";
 
 type ParsedPerson = {
   values: Record<string, string>;
@@ -69,6 +70,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
   const [includeDocumentField, setIncludeDocumentField] = useState(true);
   const [isTest, setIsTest] = useState(false);
   const [showTestInfo, setShowTestInfo] = useState(false);
+  const [outputMode, setOutputMode] = useState<CertificateOutputMode>("EDITABLE");
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId),
@@ -143,6 +145,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     setSharedMonthValues({});
     setIncludeDocumentField(true);
     setIsTest(false);
+    setOutputMode("EDITABLE");
   }
 
   async function submit() {
@@ -157,6 +160,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
     form.set("personKeys", JSON.stringify(personVariables.map((variable) => variable.key)));
     form.set("peopleRows", JSON.stringify(preview.map((row) => row.values)));
     form.set("isTest", String(isTest));
+    form.set("outputMode", outputMode);
 
     for (const variable of variables) {
       if (isCompanyVariable(variable)) {
@@ -323,6 +327,43 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
                   </span>
                 </label>
               </div>
+              <div
+                className="batch-output-field"
+                style={{
+                  display: "grid",
+                  gap: "0.45rem",
+                  minHeight: "5.25rem",
+                  alignContent: "end",
+                }}
+              >
+                <span className="field-label">Arquivo gerado</span>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+                    gap: 4,
+                    border: "1px solid var(--border-subtle)",
+                    borderRadius: 8,
+                    background: "var(--surface-2)",
+                    padding: 4,
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setOutputMode("EDITABLE")}
+                    style={outputModeButtonStyle(outputMode === "EDITABLE")}
+                  >
+                    Editavel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOutputMode("NON_EDITABLE")}
+                    style={outputModeButtonStyle(outputMode === "NON_EDITABLE")}
+                  >
+                    PDF final
+                  </button>
+                </div>
+              </div>
               {sharedVariables.map((variable) => (
                 <label key={variable.id} className="field">
                   <span className="field-label">{getFieldLabel(variable)}</span>
@@ -401,6 +442,7 @@ export function BatchForm({ templates }: { templates: BatchTemplate[] }) {
               <SummaryItem label="Empresa" value={company || "-"} />
               <SummaryItem label="Data" value={issuedDate ? formatDateLongPtBr(issuedDate) : "-"} />
               <SummaryItem label="Modo" value={isTest ? "Teste" : "Oficial"} />
+              <SummaryItem label="Arquivo" value={outputMode === "NON_EDITABLE" ? "PDF final" : "Editavel"} />
               <SummaryItem label="Válidos" value={`${validRows.length}/${preview.length}`} />
             </div>
             <div className="dark-card-flat table-scroll" style={{ marginTop: "1.25rem" }}>
@@ -556,6 +598,21 @@ function documentChoiceButtonStyle(active: boolean) {
     fontSize: "0.875rem",
     fontWeight: 700,
     padding: "0.55rem 0.75rem",
+  } as const;
+}
+
+function outputModeButtonStyle(active: boolean) {
+  return {
+    border: `1px solid ${active ? "var(--brand-500)" : "transparent"}`,
+    borderRadius: "var(--radius-sm)",
+    background: active ? "var(--brand-50)" : "transparent",
+    color: active ? "var(--brand-700)" : "var(--text-secondary)",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    fontSize: "0.8rem",
+    fontWeight: 800,
+    minHeight: "2.15rem",
+    padding: "0.35rem 0.55rem",
   } as const;
 }
 

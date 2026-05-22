@@ -3,10 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import type { CertificateStatus } from "@prisma/client";
-import { Ban, CalendarCheck2, Eye, EyeOff, FileDown, LoaderCircle, ShieldCheck, Trash2, X } from "lucide-react";
+import { Ban, CalendarCheck2, Eye, EyeOff, FileDown, FileX, LoaderCircle, ShieldCheck, Trash2, X } from "lucide-react";
 import { useConfirmDialog } from "@/components/confirmation-dialog";
 
-type PendingAction = "download-pdf" | "download-native" | "revoke" | "expire" | "schedule" | "clear" | "hide" | null;
+type PendingAction = "download-pdf" | "download-native" | "revoke" | "expire" | "schedule" | "clear" | "hide" | "delete" | null;
 type DownloadType = "pdf" | "docx" | "pptx";
 type NativeDownloadType = "docx" | "pptx";
 
@@ -22,6 +22,7 @@ export function HistoryActions({
   documentExpired,
   nativeDownloadType,
   nativeDownloadLabel,
+  canDownloadNative,
   canManage,
 }: {
   id: string;
@@ -33,6 +34,7 @@ export function HistoryActions({
   documentExpired: boolean;
   nativeDownloadType: NativeDownloadType;
   nativeDownloadLabel: "DOCX" | "PPTX";
+  canDownloadNative: boolean;
   canManage: boolean;
 }) {
   const router = useRouter();
@@ -147,6 +149,32 @@ export function HistoryActions({
     }
   }
 
+  async function deletePermanently() {
+    const confirmed = await confirm({
+      title: "Excluir certificado do sistema",
+      message: "Isso apaga definitivamente este certificado, seus arquivos, codigo de validacao e registro no historico. Esta acao nao pode ser desfeita.",
+      confirmLabel: "Excluir definitivamente",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    setPendingAction("delete");
+    try {
+      const res = await fetch(`/api/certificates/${id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "delete-permanently" }),
+      });
+      if (!res.ok) {
+        const result = await res.json().catch(() => null);
+        alert(result?.error ?? "Nao foi possivel excluir o certificado.");
+        return;
+      }
+      router.refresh();
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   async function toggleHidden() {
     const nextHidden = !hiddenAt;
     const confirmed = await confirm({
@@ -192,18 +220,20 @@ export function HistoryActions({
           PDF
         </button>
 
-        <button
-          type="button"
-          onClick={() => downloadFile(nativeDownloadType)}
-          disabled={downloadDisabled}
-          title={documentAvailable ? `Baixar ${nativeDownloadLabel}` : "Documento expirado"}
-          className="history-action-button"
-        >
-          {pendingAction === "download-native"
-            ? <LoaderCircle className="history-spin-icon" style={{ width: 13, height: 13 }} />
-            : <FileDown style={{ width: 13, height: 13 }} />}
-          {nativeDownloadLabel}
-        </button>
+        {canDownloadNative ? (
+          <button
+            type="button"
+            onClick={() => downloadFile(nativeDownloadType)}
+            disabled={downloadDisabled}
+            title={documentAvailable ? `Baixar ${nativeDownloadLabel}` : "Documento expirado"}
+            className="history-action-button"
+          >
+            {pendingAction === "download-native"
+              ? <LoaderCircle className="history-spin-icon" style={{ width: 13, height: 13 }} />
+              : <FileDown style={{ width: 13, height: 13 }} />}
+            {nativeDownloadLabel}
+          </button>
+        ) : null}
 
         <a
           href={`/validar/${verificationCode}`}
@@ -262,6 +292,18 @@ export function HistoryActions({
               className="history-action-icon history-action-danger"
             >
               {pendingAction === "expire"
+                ? <LoaderCircle className="history-spin-icon" style={{ width: 13, height: 13 }} />
+                : <FileX style={{ width: 13, height: 13 }} />}
+            </button>
+
+            <button
+              type="button"
+              disabled={disabled}
+              onClick={deletePermanently}
+              title="Excluir certificado do sistema"
+              className="history-action-icon history-action-danger"
+            >
+              {pendingAction === "delete"
                 ? <LoaderCircle className="history-spin-icon" style={{ width: 13, height: 13 }} />
                 : <Trash2 style={{ width: 13, height: 13 }} />}
             </button>

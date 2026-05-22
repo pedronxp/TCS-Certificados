@@ -26,6 +26,8 @@ type FormMessage = {
   text: string;
 };
 
+type CertificateOutputMode = "EDITABLE" | "NON_EDITABLE";
+
 export function IssueForm({
   templates,
   initialTemplateId,
@@ -55,6 +57,7 @@ export function IssueForm({
   const [documentFieldEnabled, setDocumentFieldEnabled] = useState<Record<string, boolean>>({});
   const [isTest, setIsTest] = useState(false);
   const [showTestInfo, setShowTestInfo] = useState(false);
+  const [outputMode, setOutputMode] = useState<CertificateOutputMode>("EDITABLE");
 
   const selectedTemplate = useMemo(
     () => templates.find((template) => template.id === templateId),
@@ -183,7 +186,7 @@ export function IssueForm({
       const response = await fetch("/api/certificates/issue", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ templateId, values: buildPayloadValues(), isTest }),
+        body: JSON.stringify({ templateId, values: buildPayloadValues(), isTest, outputMode }),
       });
 
       if (!response.ok) {
@@ -329,6 +332,36 @@ export function IssueForm({
             ? `${missingRequiredVariables.length} campo(s) obrigatório(s) pendente(s)`
             : "Campos obrigatórios preenchidos"}
         </p>
+        <div
+          className="issue-output-mode"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+            gap: 4,
+            border: "1px solid var(--border-subtle)",
+            borderRadius: 8,
+            background: "var(--surface-1)",
+            padding: 4,
+            minWidth: 250,
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setOutputMode("EDITABLE")}
+            className="issue-output-mode-option"
+            style={outputModeButtonStyle(outputMode === "EDITABLE")}
+          >
+            Editavel
+          </button>
+          <button
+            type="button"
+            onClick={() => setOutputMode("NON_EDITABLE")}
+            className="issue-output-mode-option"
+            style={outputModeButtonStyle(outputMode === "NON_EDITABLE")}
+          >
+            PDF final
+          </button>
+        </div>
         <label
           className="issue-test-toggle"
           style={{
@@ -424,6 +457,21 @@ export function IssueForm({
       {showTestInfo ? <TestModeDialog onClose={() => setShowTestInfo(false)} /> : null}
     </form>
   );
+}
+
+function outputModeButtonStyle(active: boolean) {
+  return {
+    border: `1px solid ${active ? "var(--brand-500)" : "transparent"}`,
+    borderRadius: 6,
+    background: active ? "var(--brand-50)" : "transparent",
+    color: active ? "var(--brand-700)" : "var(--text-secondary)",
+    cursor: "pointer",
+    fontFamily: "inherit",
+    fontSize: "0.78rem",
+    fontWeight: 800,
+    minHeight: "2.1rem",
+    padding: "0.35rem 0.55rem",
+  } as const;
 }
 
 function issueStatusChipStyle(tone?: "warning" | "success") {

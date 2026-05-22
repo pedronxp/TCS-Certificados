@@ -17,6 +17,11 @@ enum CertificateStatus {
   REVOKED
 }
 
+enum CertificateOutputMode {
+  EDITABLE
+  NON_EDITABLE
+}
+
 enum GeneratedFileType {
   PDF
   DOCX
@@ -103,6 +108,7 @@ model CertificateIssue {
   deleteAt         DateTime?
   hiddenAt         DateTime?
   isTest           Boolean           @default(false)
+  outputMode       CertificateOutputMode @default(EDITABLE)
 
   templateId String
   template   CertificateTemplate @relation(fields: [templateId], references: [id])
@@ -158,6 +164,7 @@ model CertificateBatch {
   company     String
   issuedDate  String
   isTest      Boolean                @default(false)
+  outputMode  CertificateOutputMode  @default(EDITABLE)
   startedAt   DateTime               @default(now())
   finishedAt  DateTime?
   lockedAt    DateTime?
