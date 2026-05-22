@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
   canDownloadCertificateFile,
   certificateOutputModeLabel,
@@ -54,11 +54,23 @@ test("regenerates stored Office PDFs when page count no longer matches the templ
 
 test("keeps stored Office PDFs when native point size matches the template", async () => {
   const pdf = await PDFDocument.create();
-  pdf.addPage([595.3, 841.9]);
+  const page = pdf.addPage([595.3, 841.9]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText("CERTIFICADO", { x: 72, y: 720, font, size: 24 });
 
   assert.equal(
     await shouldRegenerateCertificateFile("PDF", nativeDocxLayout(), Buffer.from(await pdf.save())),
     false,
+  );
+});
+
+test("regenerates stored Office PDFs without extractable text", async () => {
+  const pdf = await PDFDocument.create();
+  pdf.addPage([595.3, 841.9]);
+
+  assert.equal(
+    await shouldRegenerateCertificateFile("PDF", nativeDocxLayout(), Buffer.from(await pdf.save())),
+    true,
   );
 });
 

@@ -43,6 +43,7 @@ export async function shouldRegenerateCertificateFile(
 
   const expectedPageCount = getExpectedPdfPageCount(parsed.data);
   if (pdfInfo.pageCount !== expectedPageCount) return true;
+  if (!await hasExtractablePdfText(content)) return true;
 
   return !pdfFirstPageMatchesLayout(pdfInfo, parsed.data);
 }
@@ -132,6 +133,24 @@ async function getPdfInfo(pdfBuffer: Buffer) {
     };
   } catch {
     return null;
+  }
+}
+
+async function hasExtractablePdfText(pdfBuffer: Buffer) {
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const pdf = await pdfjs.getDocument({ data: new Uint8Array(pdfBuffer) }).promise;
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const text = textContent.items.map((item) => ("str" in item ? item.str : "")).join("").trim();
+      if (text) return true;
+    }
+
+    return false;
+  } catch {
+    return true;
   }
 }
 
