@@ -3,29 +3,21 @@
 import { useState } from "react";
 import { LoaderCircle, MessageCircle } from "lucide-react";
 
-type WhatsappDocumentShareButtonProps = {
-  fileUrl: string;
-  fileName: string;
+type WhatsappValidationMessageButtonProps = {
   message: string;
   phoneNumber?: string | null;
   large?: boolean;
 };
 
-type NavigatorWithFileShare = Navigator & {
-  canShare?: (data: ShareData) => boolean;
-};
-
-export function WhatsappDocumentShareButton({
-  fileUrl,
-  fileName,
+export function WhatsappValidationMessageButton({
   message,
   phoneNumber,
   large = false,
-}: WhatsappDocumentShareButtonProps) {
+}: WhatsappValidationMessageButtonProps) {
   const [status, setStatus] = useState("");
   const [sharing, setSharing] = useState(false);
 
-  async function shareDocument() {
+  function openValidationMessage() {
     if (sharing) return;
 
     setSharing(true);
@@ -34,50 +26,11 @@ export function WhatsappDocumentShareButton({
     if (fallbackWindow) fallbackWindow.opener = null;
 
     try {
-      const response = await fetch(fileUrl, { credentials: "include" });
-      if (!response.ok) {
-        throw new Error("Nao foi possivel baixar o PDF para compartilhar.");
-      }
-
-      const blob = await response.blob();
-      const file = new File([blob], fileName, {
-        type: blob.type || "application/pdf",
-      });
-      const shareData: ShareData = {
-        title: "Certificado",
-        text: message,
-        files: [file],
-      };
-      const navigatorWithShare = navigator as NavigatorWithFileShare;
-      const canShareFiles =
-        typeof navigatorWithShare.canShare === "function" &&
-        navigatorWithShare.canShare(shareData);
-
-      if (navigatorWithShare.share && canShareFiles) {
-        try {
-          await navigatorWithShare.share(shareData);
-          fallbackWindow?.close();
-          setStatus("Arquivo enviado para compartilhamento.");
-          return;
-        } catch (error) {
-          if (error instanceof DOMException && error.name === "AbortError") {
-            fallbackWindow?.close();
-            setStatus("Compartilhamento cancelado.");
-            return;
-          }
-        }
-      }
-
-      downloadFile(blob, fileName);
-      openWhatsapp(
-        `${message}\n\nO PDF foi baixado neste dispositivo. Anexe o arquivo "${fileName}" nesta conversa do WhatsApp.`,
-        fallbackWindow,
-        phoneNumber,
-      );
-      setStatus("PDF baixado. Anexe o arquivo na conversa do WhatsApp.");
+      openWhatsapp(message, fallbackWindow, phoneNumber);
+      setStatus("WhatsApp aberto com a mensagem de validação.");
     } catch (error) {
       fallbackWindow?.close();
-      setStatus(error instanceof Error ? error.message : "Nao foi possivel compartilhar agora.");
+      setStatus(error instanceof Error ? error.message : "Nao foi possivel abrir o WhatsApp agora.");
     } finally {
       setSharing(false);
     }
@@ -87,7 +40,7 @@ export function WhatsappDocumentShareButton({
     <div style={{ display: "grid", gap: "0.35rem" }}>
       <button
         type="button"
-        onClick={shareDocument}
+        onClick={openValidationMessage}
         className="btn btn-ghost"
         style={{
           minHeight: large ? "4.25rem" : undefined,
@@ -102,7 +55,7 @@ export function WhatsappDocumentShareButton({
         ) : (
           <MessageCircle style={{ width: 18, height: 18 }} />
         )}
-        {sharing ? "Preparando PDF" : "Enviar PDF no WhatsApp"}
+        {sharing ? "Preparando envio" : "Enviar validação no WhatsApp"}
       </button>
       {status ? (
         <span style={{ color: "var(--text-muted)", fontSize: "0.75rem", lineHeight: 1.35 }}>
@@ -111,18 +64,6 @@ export function WhatsappDocumentShareButton({
       ) : null}
     </div>
   );
-}
-
-function downloadFile(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function openWhatsapp(message: string, targetWindow: Window | null, phoneNumber?: string | null) {

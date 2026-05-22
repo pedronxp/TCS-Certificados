@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Download, FileText, Files, History, ShieldCheck } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
-import { WhatsappDocumentShareButton } from "@/components/certificates/whatsapp-document-share-button";
+import { WhatsappValidationMessageButton } from "@/components/certificates/whatsapp-document-share-button";
 import { requireUser } from "@/lib/auth";
 import {
   canDownloadCertificateFile,
@@ -54,9 +54,12 @@ export default async function CertificateCompletePage({
     const nativeType = nativeFileType.toLowerCase();
     const canDownloadNative = canDownloadCertificateFile(issue.outputMode, nativeFileType);
     const pdfHref = `/api/certificates/${issue.id}/download/pdf?regenerate=1`;
-    const whatsappMessage = issue.isTest
-      ? `O certificado de teste de ${issue.recipient.name}, referente ao curso ${issue.template.name}, foi gerado para conferência. Vou enviar o arquivo em seguida.`
-      : `Olá, ${issue.recipient.name}! Seu certificado do curso ${issue.template.name} foi emitido. Você pode validar a autenticidade pelo link: ${buildValidationUrl(issue.verificationCode)}. Vou enviar o arquivo em seguida.`;
+    const whatsappMessage = buildWhatsappValidationMessage({
+      recipientName: issue.recipient.name,
+      courseName: issue.template.name,
+      validationUrl: buildValidationUrl(issue.verificationCode),
+      isTest: issue.isTest,
+    });
 
     return (
       <CompletionShell
@@ -76,7 +79,6 @@ export default async function CertificateCompletePage({
           nativeHref={canDownloadNative ? `/api/certificates/${issue.id}/download/${nativeType}` : null}
           nativeLabel={nativeFileType}
           phoneNumber={findWhatsappPhone(issue.values)}
-          whatsappFileName={getPdfFilename(issue.recipient.name, issue.verificationCode)}
           whatsappMessage={whatsappMessage}
         />
       </CompletionShell>
@@ -134,9 +136,12 @@ export default async function CertificateCompletePage({
           <div style={{ display: "grid" }}>
             {batch.issues.map((issue) => {
               const pdfHref = `/api/certificates/${issue.id}/download/pdf?regenerate=1`;
-              const whatsappMessage = batch.isTest
-                ? `O certificado de teste de ${issue.recipient.name}, referente ao curso ${batch.template.name}, foi gerado para conferência. Vou enviar o arquivo em seguida.`
-                : `Olá, ${issue.recipient.name}! Seu certificado do curso ${batch.template.name} foi emitido. Você pode validar a autenticidade pelo link: ${buildValidationUrl(issue.verificationCode)}. Vou enviar o arquivo em seguida.`;
+              const whatsappMessage = buildWhatsappValidationMessage({
+                recipientName: issue.recipient.name,
+                courseName: batch.template.name,
+                validationUrl: buildValidationUrl(issue.verificationCode),
+                isTest: batch.isTest,
+              });
 
               return (
                 <div key={issue.id} className="dark-list-row" style={{ alignItems: "center" }}>
@@ -149,9 +154,7 @@ export default async function CertificateCompletePage({
                     {canDownloadNative ? (
                       <DownloadButton href={`/api/certificates/${issue.id}/download/${nativeType}`} label={nativeFileType} />
                     ) : null}
-                    <WhatsappDocumentShareButton
-                      fileUrl={pdfHref}
-                      fileName={getPdfFilename(issue.recipient.name, issue.verificationCode)}
+                    <WhatsappValidationMessageButton
                       message={whatsappMessage}
                       phoneNumber={findWhatsappPhone(issue.values)}
                     />
@@ -236,14 +239,12 @@ function DownloadPanel({
   nativeHref,
   nativeLabel,
   phoneNumber,
-  whatsappFileName,
   whatsappMessage,
 }: {
   pdfHref: string;
   nativeHref: string | null;
   nativeLabel: string;
   phoneNumber: string | null;
-  whatsappFileName: string;
   whatsappMessage: string;
 }) {
   return (
@@ -251,9 +252,7 @@ function DownloadPanel({
       <div style={{ display: "grid", gap: "0.75rem", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))" }}>
         <DownloadButton href={pdfHref} label="PDF" large />
         {nativeHref ? <DownloadButton href={nativeHref} label={nativeLabel} large /> : null}
-        <WhatsappDocumentShareButton
-          fileUrl={pdfHref}
-          fileName={whatsappFileName}
+        <WhatsappValidationMessageButton
           message={whatsappMessage}
           phoneNumber={phoneNumber}
           large
@@ -297,16 +296,28 @@ function buildValidationUrl(code: string) {
   return `${appUrl.replace(/\/$/, "")}/validar/${encodeURIComponent(code)}`;
 }
 
+function buildWhatsappValidationMessage({
+  recipientName,
+  courseName,
+  validationUrl,
+  isTest,
+}: {
+  recipientName: string;
+  courseName: string;
+  validationUrl: string;
+  isTest: boolean;
+}) {
+  const testPrefix = isTest ? "[TESTE] " : "";
+
+  return `${testPrefix}Parabéns, ${recipientName}! Seu certificado do curso ${courseName} foi emitido pela TCS Cursos. Valide a autenticidade pelo link: ${validationUrl}`;
+}
+
 function getRecommendationText(outputMode: CertificateOutputMode) {
   if (outputMode === "NON_EDITABLE") {
     return "Recomendacao: baixe o PDF final agora e envie esse arquivo como versao fechada do certificado. A validacao por codigo/QR continua sendo a prova oficial de autenticidade.";
   }
 
   return "Recomendacao: baixe o PDF ou o arquivo editavel agora e envie imediatamente. Assim voce evita confusao de versoes, perda de prazo ou esquecimento depois da emissao.";
-}
-
-function getPdfFilename(recipientName: string, verificationCode: string) {
-  return `${sanitizeFilenamePart(recipientName)}-${sanitizeFilenamePart(verificationCode)}.pdf`;
 }
 
 function findWhatsappPhone(values: unknown) {
@@ -327,17 +338,6 @@ function findWhatsappPhone(values: unknown) {
   }
 
   return null;
-}
-
-function sanitizeFilenamePart(value: string) {
-  return (
-    value
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[<>:"/\\|?*\u0000-\u001F]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim() || "certificado"
-  );
 }
 
 function normalizeKey(value: string) {
