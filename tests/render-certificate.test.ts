@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Document, Packer, Paragraph } from "docx";
 import JSZip from "jszip";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import PizZip from "pizzip";
 import {
   renderCertificateHtml,
@@ -263,7 +263,78 @@ test("renders filled DOCX preview before using static visual PDF fallback", asyn
   }
 });
 
-test("uses configured filled visual fallback even when native DOCX converter returns expected page count", async () => {
+test("keeps native DOCX PDF fidelity when only validation footer overflows to an extra page", async () => {
+  const previousEnv = snapshotConverterEnv();
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+  console.warn = () => {};
+
+  try {
+    const nativePdf = await PDFDocument.create();
+    const font = nativePdf.embedStandardFont(StandardFonts.Helvetica);
+    const firstPage = nativePdf.addPage([595.3, 841.9]);
+    firstPage.drawText("PDF nativo fiel ao DOCX", { x: 60, y: 600, size: 18, font });
+    const overflowPage = nativePdf.addPage([595.3, 841.9]);
+    overflowPage.drawText("Certificado valido apenas com a assinatura e CPF do aluno.", { x: 80, y: 740, size: 12, font });
+    overflowPage.drawText("Numeracao:TCS-BR-2026-0200", { x: 180, y: 720, size: 12, font });
+    configureMockCloudConvertPdf(Buffer.from(await nativePdf.save()));
+
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("Aluno {{nome}}"),
+            new Paragraph("Codigo {{COD}}"),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+    const output = await renderPdfBuffer({
+      template: {
+        name: "Suporte Basico de Vida V2",
+        width: 794,
+        height: 1123,
+        background: null,
+        layout: {
+          baseDocumentMode: "native",
+          baseFileName: "Suporte Basico de Vida V2.docx",
+          baseFileType: docxMimeType,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+          baseImageDataUrl: pngDataUrl,
+          basePages: [
+            {
+              index: 0,
+              width: 794,
+              height: 1123,
+              imageDataUrl: pngDataUrl,
+            },
+          ],
+          elements: [],
+        },
+      },
+      values: { nome: "Maria Silva" },
+      verificationCode: "TCS-BR-2026-0200",
+      appUrl: "http://localhost:3000",
+    });
+
+    const pdf = await PDFDocument.load(output);
+    const size = pdf.getPage(0).getSize();
+    const text = await extractPdfText(output);
+
+    assert.equal(pdf.getPageCount(), 1);
+    assert.ok(size.width > 590 && size.width < 600);
+    assert.match(text, /PDF nativo fiel ao DOCX/);
+    assert.match(text, /TCS-BR-2026-0200/);
+  } finally {
+    restoreConverterEnv(previousEnv);
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+test("uses configured filled visual fallback when native DOCX converter returns incompatible size", async () => {
   const previousEnv = snapshotConverterEnv();
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
@@ -326,6 +397,20 @@ test("uses configured filled visual fallback even when native DOCX converter ret
     console.warn = originalWarn;
   }
 });
+
+async function extractPdfText(pdfBuffer: Buffer) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdf = await pdfjs.getDocument({ data: new Uint8Array(pdfBuffer), disableWorker: true }).promise;
+  const pages: string[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    const page = await pdf.getPage(pageNumber);
+    const textContent = await page.getTextContent();
+    pages.push(textContent.items.map((item: { str?: string }) => item.str ?? "").join(" "));
+  }
+
+  return pages.join(" ");
+}
 
 function snapshotConverterEnv() {
   return {

@@ -262,23 +262,28 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
   const docxBuffer = renderDocxFromBaseTemplate(input, layout);
   const expectedPageCount = getExpectedPdfPageCount(layout);
   const nativePdf = await convertDocxToPdfWithFallbacks(docxBuffer);
-  let visualPdf: Buffer | null = null;
 
-  if (hasRenderableVisualPdfFallback(layout)) {
-    visualPdf = await renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
-    if (visualPdf) return visualPdf;
+  if (nativePdf) {
+    const nativeInfo = await getPdfInfo(nativePdf);
+    if (!nativeInfo) return nativePdf;
+
+    if (
+      nativeInfo.pageCount === expectedPageCount &&
+      pdfFirstPageMatchesTemplateSize(nativeInfo, input.template.width, input.template.height, layout)
+    ) {
+      return nativePdf;
+    }
+
+    if (
+      nativeInfo.pageCount > expectedPageCount &&
+      pdfFirstPageMatchesTemplateSize(nativeInfo, input.template.width, input.template.height, layout) &&
+      await hasOnlyValidationOverflowPages(nativePdf, expectedPageCount, input.verificationCode)
+    ) {
+      return trimNativePdfValidationOverflow(nativePdf, expectedPageCount, input.verificationCode);
+    }
   }
 
-  if (!nativePdf) {
-    return renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
-  }
-
-  const nativePageCount = await getPdfPageCount(nativePdf);
-  if (!nativePageCount || nativePageCount === expectedPageCount) {
-    return nativePdf;
-  }
-
-  visualPdf ??= await renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
+  const visualPdf = await renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
   return visualPdf ?? nativePdf;
 }
 
@@ -305,13 +310,134 @@ function getExpectedPdfPageCount(layout: TemplateLayout) {
   return Math.max(1, basePageCount, elementPageCount);
 }
 
-async function getPdfPageCount(pdfBuffer: Buffer) {
+async function getPdfInfo(pdfBuffer: Buffer) {
   try {
     const pdf = await PDFDocument.load(pdfBuffer);
-    return pdf.getPageCount();
+    const firstPage = pdf.getPage(0);
+    return {
+      pageCount: pdf.getPageCount(),
+      firstPageSize: firstPage.getSize(),
+    };
   } catch {
     return null;
   }
+}
+
+function pdfFirstPageMatchesTemplateSize(
+  info: NonNullable<Awaited<ReturnType<typeof getPdfInfo>>>,
+  templateWidth: number,
+  templateHeight: number,
+  layout: TemplateLayout,
+) {
+  const expectedPage = layout.basePages?.[0];
+  const expectedWidth = expectedPage?.width || templateWidth;
+  const expectedHeight = expectedPage?.height || templateHeight;
+  const { width, height } = info.firstPageSize;
+
+  return (
+    dimensionsAreClose(width, height, expectedWidth, expectedHeight) ||
+    dimensionsAreClose(width * 4 / 3, height * 4 / 3, expectedWidth, expectedHeight)
+  );
+}
+
+function dimensionsAreClose(width: number, height: number, expectedWidth: number, expectedHeight: number) {
+  return relativeDifference(width, expectedWidth) <= 0.03 && relativeDifference(height, expectedHeight) <= 0.03;
+}
+
+function relativeDifference(value: number, expected: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(expected) || expected <= 0) return Number.POSITIVE_INFINITY;
+  return Math.abs(value - expected) / expected;
+}
+
+async function hasOnlyValidationOverflowPages(
+  pdfBuffer: Buffer,
+  expectedPageCount: number,
+  verificationCode: string,
+) {
+  const texts = await extractPdfPageTexts(pdfBuffer);
+  if (texts.length <= expectedPageCount) return false;
+
+  const overflowTexts = texts.slice(expectedPageCount);
+  return overflowTexts.every((text) => {
+    const normalized = normalizePdfText(text);
+    return (
+      normalized.includes(normalizePdfText(verificationCode)) &&
+      normalized.includes("certificado valido") &&
+      normalized.includes("cpf") &&
+      normalized.includes("aluno") &&
+      normalized.length <= 220
+    );
+  });
+}
+
+async function extractPdfPageTexts(pdfBuffer: Buffer) {
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const data = new Uint8Array(pdfBuffer);
+    const pdf = await pdfjs.getDocument({ data }).promise;
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      pages.push(textContent.items.map((item) => ("str" in item ? item.str : "")).join(" "));
+    }
+
+    return pages;
+  } catch {
+    return [];
+  }
+}
+
+function normalizePdfText(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function trimNativePdfValidationOverflow(
+  pdfBuffer: Buffer,
+  expectedPageCount: number,
+  verificationCode: string,
+) {
+  const sourcePdf = await PDFDocument.load(pdfBuffer);
+  const outputPdf = await PDFDocument.create();
+  const copiedPages = await outputPdf.copyPages(
+    sourcePdf,
+    Array.from({ length: expectedPageCount }, (_, index) => index),
+  );
+
+  for (const page of copiedPages) outputPdf.addPage(page);
+
+  drawValidationFooter(outputPdf, outputPdf.getPage(expectedPageCount - 1), verificationCode);
+
+  return Buffer.from(await outputPdf.save());
+}
+
+function drawValidationFooter(pdfDocument: PDFDocument, page: PDFPage, verificationCode: string) {
+  const { width } = page.getSize();
+  const fontSize = 9;
+  const firstLine = "Certificado válido apenas com a assinatura e CPF do aluno.";
+  const secondLine = `Numeração:${verificationCode}`;
+  const font = pdfDocument.embedStandardFont(StandardFonts.Helvetica);
+
+  page.drawText(firstLine, {
+    x: (width - font.widthOfTextAtSize(firstLine, fontSize)) / 2,
+    y: 52,
+    size: fontSize,
+    font,
+    color: rgb(0, 0, 0),
+  });
+  page.drawText(secondLine, {
+    x: (width - font.widthOfTextAtSize(secondLine, fontSize)) / 2,
+    y: 40,
+    size: fontSize,
+    font,
+    color: rgb(0, 0, 0),
+  });
 }
 
 async function renderPdfFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
