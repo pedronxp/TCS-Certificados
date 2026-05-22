@@ -15,7 +15,10 @@ import { BrandLogo } from "@/components/brand-logo";
 import { SensitiveDocumentInput } from "@/components/sensitive-document-input";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
-import { getTemplateNativeFileType } from "@/lib/certificate-output-format";
+import {
+  canDownloadCertificateFile,
+  getTemplateNativeFileType,
+} from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import {
   maskDocumentForDisplay,
@@ -82,6 +85,7 @@ export default async function ValidatePage({
     canonicalCode,
   )}/download?type=pdf&documento=${encodeURIComponent(documentValue)}`;
   const nativeFileType = issue ? getTemplateNativeFileType(issue.template.layout) : "DOCX";
+  const canDownloadNative = issue ? canDownloadCertificateFile(issue.outputMode, nativeFileType) : false;
   const publicNativeUrl = `/api/public/certificates/${encodeURIComponent(
     canonicalCode,
   )}/download?type=${nativeFileType.toLowerCase()}&documento=${encodeURIComponent(documentValue)}`;
@@ -153,7 +157,7 @@ export default async function ValidatePage({
                     Abrir PDF
                   </a>
                 ) : null}
-                {canShowDocument ? (
+                {canShowDocument && canDownloadNative ? (
                   <a className="btn btn-ghost" href={publicNativeUrl}>
                     <Download className="size-4" />
                     Baixar {nativeFileType}

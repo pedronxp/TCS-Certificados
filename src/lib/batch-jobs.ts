@@ -7,6 +7,10 @@ import {
   isBatchJobStale,
   STALE_BATCH_TIMEOUT_MS,
 } from "@/lib/batch-status";
+import {
+  normalizeCertificateOutputMode,
+  type CertificateOutputMode,
+} from "@/lib/certificate-output-format";
 import { DATE_FIELD_KEYS } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
 
@@ -20,14 +24,17 @@ export async function startBatchJob({
   issuedById,
   lineOffset = 1,
   isTest = false,
+  outputMode = "EDITABLE",
 }: {
   templateId: string;
   rows: Record<string, string>[];
   issuedById: string;
   lineOffset?: number;
   isTest?: boolean;
+  outputMode?: CertificateOutputMode;
 }) {
   const firstRow = rows[0] ?? {};
+  const normalizedOutputMode = normalizeCertificateOutputMode(outputMode);
   const batch = await prisma.certificateBatch.create({
     data: {
       template: { connect: { id: templateId } },
@@ -37,6 +44,7 @@ export async function startBatchJob({
       company: findFirstValue(firstRow, ["empresa", "company"]),
       issuedDate: findFirstValue(firstRow, DATE_FIELD_KEYS),
       isTest,
+      outputMode: normalizedOutputMode,
     },
   });
 
@@ -127,6 +135,7 @@ function findBatchForProcessing(id: string, userId: string) {
       templateId: true,
       createdById: true,
       isTest: true,
+      outputMode: true,
     },
   });
 }
@@ -178,6 +187,7 @@ async function processNextBatchRow(batch: BatchForProcessing, userId: string) {
       issuedById: batch.createdById,
       batchId: batch.id,
       isTest: batch.isTest,
+      outputMode: batch.outputMode,
     });
   } catch (error) {
     rowError = `Linha ${line}: ${error instanceof Error ? error.message : "erro desconhecido"}`;

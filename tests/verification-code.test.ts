@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   buildVerificationTemplateValues,
+  findFirstAvailableVerificationSequence,
   generateNextVerificationCode,
   generateVerificationCode,
   isSystemCertificateVariableKey,
@@ -41,13 +42,25 @@ test("keeps legacy validation codes compatible", () => {
   assert.equal(normalizeVerificationCode("TCS-BR-2026-0000"), "TCS-BR-2026-0000");
 });
 
-test("generates the next ordered code using the global system sequence", async () => {
+test("generates the next ordered code using the first available sequence", async () => {
   const code = await generateNextVerificationCode(
-    async () => ["TCS-BR-2025-0009", "TCS-BR-2026-0001", "ABC123_XYZ789"],
+    async () => ["TCS-BR-2025-0003", "TCS-BR-2026-0001", "ABC123_XYZ789"],
     new Date("2026-05-03T12:00:00-03:00"),
   );
 
-  assert.equal(code, "TCS-BR-2026-0010");
+  assert.equal(code, "TCS-BR-2026-0002");
+});
+
+test("finds the first available sequence after permanent deletion gaps", () => {
+  assert.equal(
+    findFirstAvailableVerificationSequence([
+      "TCS-BR-2026-0001",
+      "TCS-BR-2026-0002",
+      "TCS-BR-2026-0004",
+    ]),
+    3,
+  );
+  assert.equal(findFirstAvailableVerificationSequence(["ABC123_XYZ789"]), 1);
 });
 
 test("parses ordered verification sequences", () => {

@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CertificateStatus } from "@prisma/client";
-import { CheckSquare2, Database, FileText, LoaderCircle, Square, Trash2 } from "lucide-react";
+import { CheckSquare2, Database, FileText, FileX, LoaderCircle, Square, Trash2 } from "lucide-react";
 import { useConfirmDialog } from "@/components/confirmation-dialog";
 import { HistoryActions } from "@/components/certificates/history-actions";
 
@@ -13,6 +13,8 @@ export type HistoryIssue = {
   verificationCode: string;
   status: CertificateStatus;
   isTest: boolean;
+  outputMode: "EDITABLE" | "NON_EDITABLE";
+  outputModeLabel: string;
   issuedAt: string;
   revokedAt: string | null;
   deleteAt: string | null;
@@ -27,6 +29,7 @@ export type HistoryIssue = {
   issuedByName: string;
   nativeDownloadType: "docx" | "pptx";
   nativeDownloadLabel: "DOCX" | "PPTX";
+  canDownloadNative: boolean;
 };
 
 const dateTimeFormatter = new Intl.DateTimeFormat("pt-BR", {
@@ -55,6 +58,7 @@ export function HistoryTable({
   const { confirm, confirmationDialog } = useConfirmDialog();
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeletingPermanently, setBulkDeletingPermanently] = useState(false);
   const [resetting, setResetting] = useState(false);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const allSelected = issues.length > 0 && issues.every((issue) => selectedSet.has(issue.id));
@@ -75,7 +79,7 @@ export function HistoryTable({
   }
 
   async function deleteSelected() {
-    if (!selectedIds.length || bulkDeleting) return;
+    if (!selectedIds.length || bulkDeleting || bulkDeletingPermanently) return;
     const confirmed = await confirm({
       title: "Remover documentos selecionados",
       message: `Remover os arquivos de ${selectedIds.length} certificado(s)? Os códigos e a validação continuam no sistema.`,
@@ -102,8 +106,36 @@ export function HistoryTable({
     }
   }
 
+  async function deleteSelectedPermanently() {
+    if (!selectedIds.length || bulkDeleting || bulkDeletingPermanently) return;
+    const confirmed = await confirm({
+      title: "Excluir certificados selecionados",
+      message: `Excluir definitivamente ${selectedIds.length} certificado(s)? Isso apaga os registros, arquivos e codigos de validacao do sistema. Esta acao nao pode ser desfeita.`,
+      confirmLabel: "Excluir definitivamente",
+      tone: "danger",
+    });
+    if (!confirmed) return;
+    setBulkDeletingPermanently(true);
+    try {
+      const response = await fetch("/api/certificates", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: selectedIds, action: "delete-permanently" }),
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        alert(result?.error ?? "Nao foi possivel excluir os certificados selecionados.");
+        return;
+      }
+      setSelectedIds([]);
+      router.refresh();
+    } finally {
+      setBulkDeletingPermanently(false);
+    }
+  }
+
   async function resetDatabase() {
-    if (!canReset || resetting) return;
+    if (!canReset || resetting || bulkDeleting || bulkDeletingPermanently) return;
 
     const confirmed = await confirm({
       title: "Limpar banco e resetar contagem",
@@ -158,19 +190,31 @@ export function HistoryTable({
 
             <button
               type="button"
-              disabled={!selectedIds.length || bulkDeleting}
+              disabled={!selectedIds.length || bulkDeleting || bulkDeletingPermanently}
               onClick={deleteSelected}
               className="history-toolbar-button history-toolbar-danger"
             >
               {bulkDeleting
                 ? <LoaderCircle className="history-spin-icon" style={{ width: 14, height: 14 }} />
-                : <Trash2 style={{ width: 14, height: 14 }} />}
+                : <FileX style={{ width: 14, height: 14 }} />}
               Remover documentos
             </button>
 
             <button
               type="button"
-              disabled={!canReset || resetting}
+              disabled={!selectedIds.length || bulkDeleting || bulkDeletingPermanently}
+              onClick={deleteSelectedPermanently}
+              className="history-toolbar-button history-toolbar-danger"
+            >
+              {bulkDeletingPermanently
+                ? <LoaderCircle className="history-spin-icon" style={{ width: 14, height: 14 }} />
+                : <Trash2 style={{ width: 14, height: 14 }} />}
+              Excluir do sistema
+            </button>
+
+            <button
+              type="button"
+              disabled={!canReset || resetting || bulkDeleting || bulkDeletingPermanently}
               onClick={resetDatabase}
               className="history-toolbar-button history-toolbar-reset"
             >
@@ -211,6 +255,7 @@ export function HistoryTable({
 
                 <div className="history-status-cell">
                   {issue.isTest ? <span className="history-chip history-chip-test">Teste</span> : null}
+                  <span className="history-chip history-chip-brand">{issue.outputModeLabel}</span>
                   <StatusBadge status={issue.status} />
                   <DocumentBadge issue={issue} />
                   {issue.revokedAt && (
@@ -232,6 +277,7 @@ export function HistoryTable({
                   documentExpired={issue.documentExpired}
                   nativeDownloadType={issue.nativeDownloadType}
                   nativeDownloadLabel={issue.nativeDownloadLabel}
+                  canDownloadNative={issue.canDownloadNative}
                   canManage={canManage}
                 />
               </div>

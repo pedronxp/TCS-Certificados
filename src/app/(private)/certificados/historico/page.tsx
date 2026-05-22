@@ -5,9 +5,13 @@ import { HistoryTable, type HistoryIssue } from "@/components/certificates/histo
 import { requireUser } from "@/lib/auth";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
-import { getTemplateNativeFileType } from "@/lib/certificate-output-format";
+import {
+  canDownloadCertificateFile,
+  certificateOutputModeLabel,
+  getTemplateNativeFileType,
+} from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
-import { normalizeVerificationCode } from "@/lib/verification-code";
+import { findFirstAvailableVerificationSequence, normalizeVerificationCode } from "@/lib/verification-code";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +45,7 @@ export default async function CertificateHistoryPage({
   const canManage = user.role === "ADMIN";
   const where = buildWhere(filters, { canManage, userId: user.id, now });
 
-  const [rows, totalResults, sequence, resettableCount] = await Promise.all([
+  const [rows, totalResults, sequence, resettableCount, verificationCodes] = await Promise.all([
     prisma.certificateIssue.findMany({
       where,
       take: pageSize + 1,
@@ -51,6 +55,7 @@ export default async function CertificateHistoryPage({
         verificationCode: true,
         status: true,
         isTest: true,
+        outputMode: true,
         issuedAt: true,
         revokedAt: true,
         values: true,
@@ -83,18 +88,25 @@ export default async function CertificateHistoryPage({
       select: { value: true },
     }),
     canManage ? prisma.certificateIssue.count() : Promise.resolve(0),
+    prisma.certificateIssue.findMany({
+      where: { verificationCode: { startsWith: "TCS-BR-" } },
+      select: { verificationCode: true },
+    }),
   ]);
 
   const hasNextPage = rows.length > pageSize;
   const issues = rows.slice(0, pageSize).map<HistoryIssue>((issue) => {
     const documentExpired = isCertificateDocumentExpired(issue.deleteAt, now);
     const nativeFileType = getTemplateNativeFileType(issue.template.layout);
+    const canDownloadNative = canDownloadCertificateFile(issue.outputMode, nativeFileType);
 
     return {
       id: issue.id,
       verificationCode: issue.verificationCode,
       status: issue.status,
       isTest: issue.isTest,
+      outputMode: issue.outputMode,
+      outputModeLabel: certificateOutputModeLabel(issue.outputMode),
       issuedAt: issue.issuedAt.toISOString(),
       revokedAt: issue.revokedAt?.toISOString() ?? null,
       deleteAt: toDateInputValue(issue.deleteAt),
@@ -109,12 +121,16 @@ export default async function CertificateHistoryPage({
       issuedByName: issue.issuedBy.name,
       nativeDownloadType: nativeFileType.toLowerCase() as "docx" | "pptx",
       nativeDownloadLabel: nativeFileType,
+      canDownloadNative,
     };
   });
 
   const start = issues.length ? (filters.page - 1) * pageSize + 1 : 0;
   const end = start + issues.length - 1;
   const sequenceValue = sequence?.value ?? 0;
+  const nextSequenceValue = findFirstAvailableVerificationSequence(
+    verificationCodes.map((issue) => issue.verificationCode),
+  );
 
   return (
     <div className="page-shell page-shell-wide history-page">
@@ -154,8 +170,8 @@ export default async function CertificateHistoryPage({
         <MetricCard
           icon={<Database style={{ width: 18, height: 18 }} />}
           label="Próxima emissão"
-          value={formatSequenceValue(sequenceValue + 1)}
-          helper="após o próximo certificado"
+          value={formatSequenceValue(nextSequenceValue)}
+          helper="primeiro número livre"
         />
       </section>
 

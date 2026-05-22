@@ -3,9 +3,11 @@ import { requireUser } from "@/lib/auth";
 import { isCertificateDocumentExpired } from "@/lib/certificate-validity";
 import { expireScheduledCertificateDocuments } from "@/lib/certificate-service";
 import {
+  canDownloadCertificateFile,
   certificateFileExtension,
   certificateFileMimeType,
   isOfficeBaseLayout,
+  NON_EDITABLE_NATIVE_DOWNLOAD_ERROR,
   normalizeCertificateFileType,
   type CertificateFileType,
 } from "@/lib/certificate-output-format";
@@ -29,7 +31,15 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string; type: string }> },
 ) {
-  const user = await requireUser();
+  return handleAuthenticatedCertificateDownload(request, context, requireUser);
+}
+
+export async function handleAuthenticatedCertificateDownload(
+  request: Request,
+  context: { params: Promise<{ id: string; type: string }> },
+  loadUser: typeof requireUser,
+) {
+  const user = await loadUser();
   await expireScheduledCertificateDocuments().catch((error) => {
     console.error("Falha ao limpar certificados com prazo vencido", error);
   });
@@ -49,6 +59,15 @@ export async function GET(
         code: "CERTIFICATE_DOCUMENT_EXPIRED",
       },
       { status: 410 },
+    );
+  }
+  if (!canDownloadCertificateFile(issue.outputMode, fileType)) {
+    return NextResponse.json(
+      {
+        error: NON_EDITABLE_NATIVE_DOWNLOAD_ERROR,
+        code: "CERTIFICATE_NATIVE_DOWNLOAD_BLOCKED",
+      },
+      { status: 403 },
     );
   }
 
@@ -114,6 +133,7 @@ async function findIssueForDownload(issueId: string, type: CertificateFileType) 
       id: true,
       verificationCode: true,
       values: true,
+      outputMode: true,
       deleteAt: true,
       issuedById: true,
       recipient: { select: { name: true } },
