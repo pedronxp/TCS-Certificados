@@ -118,6 +118,29 @@ export async function buildDocxPreview(
   };
 }
 
+export async function buildDocxVisualPreview(
+  buffer: Buffer,
+  options: { assets?: TemplateBaseAsset[] } = {},
+): Promise<Pick<DocxPreviewResult, "page" | "pages" | "imageDataUrl" | "imageEngine">> {
+  const workingBuffer = await applyDocxAssetReplacements(buffer, options.assets);
+  const page = await extractDocxPage(workingBuffer);
+  const renderedPreview = await renderDocxPagePreviewSafely(workingBuffer, page);
+  const renderedPages = renderedPreview.pages.length
+    ? renderedPreview.pages
+    : [{ ...page, index: 0, imageDataUrl: renderedPreview.imageDataUrl || undefined }];
+  const pages = trimTrailingEditablePages(
+    normalizeEditablePreviewPages(renderedPages, page, renderedPreview.elements),
+    [],
+  );
+
+  return {
+    page,
+    pages,
+    imageDataUrl: pages[0]?.imageDataUrl ?? renderedPreview.imageDataUrl,
+    imageEngine: pages.some((item) => item.imageDataUrl) || renderedPreview.imageDataUrl ? "docx-preview-api" : "",
+  };
+}
+
 export async function applyDocxAssetReplacements(
   buffer: Buffer,
   assets: TemplateBaseAsset[] | undefined,
