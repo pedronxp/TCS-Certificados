@@ -6,9 +6,9 @@ import {
   canDownloadCertificateFile,
   certificateFileExtension,
   certificateFileMimeType,
-  isOfficeBaseLayout,
   NON_EDITABLE_NATIVE_DOWNLOAD_ERROR,
   normalizeCertificateFileType,
+  shouldRegenerateCertificateFile,
   type CertificateFileType,
 } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
@@ -20,7 +20,6 @@ import {
 } from "@/lib/render-certificate";
 import { downloadCertificateFile } from "@/lib/supabase";
 
-const STALE_OFFICE_PDF_MAX_BYTES = 12_000;
 const PDF_CONVERTER_UNAVAILABLE_USER_MESSAGE =
   "Nao foi possivel gerar o PDF deste certificado agora. Baixe o arquivo nativo do modelo enquanto a conversao para PDF e configurada no servidor.";
 
@@ -78,7 +77,7 @@ export async function handleAuthenticatedCertificateDownload(
   const mustRegenerate =
     forceRegenerate ||
     !storedContent ||
-    shouldRegenerateStoredContent(fileType, issue.template.layout, storedContent);
+    await shouldRegenerateCertificateFile(fileType, issue.template.layout, storedContent);
   let regeneratedFile: RegeneratedCertificateFile | null = null;
   let regenerationError: Error | null = null;
 
@@ -167,13 +166,6 @@ type RegeneratedCertificateFile = {
   filename: string;
   mimeType: string;
 };
-
-function shouldRegenerateStoredContent(type: CertificateFileType, layout: unknown, content: Buffer) {
-  if (type !== "PDF") return false;
-  if (!content.subarray(0, 4).equals(Buffer.from("%PDF"))) return true;
-
-  return content.length > 0 && content.length < STALE_OFFICE_PDF_MAX_BYTES && isOfficeBaseLayout(layout);
-}
 
 async function regenerateFileContent(issue: DownloadIssue, type: CertificateFileType): Promise<RegeneratedCertificateFile> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";

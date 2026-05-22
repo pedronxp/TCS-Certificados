@@ -1,4 +1,5 @@
 import { templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
+import { PDFDocument } from "pdf-lib";
 
 export type NativeCertificateFileType = "DOCX" | "PPTX";
 export type CertificateFileType = "PDF" | NativeCertificateFileType;
@@ -24,6 +25,26 @@ export function isOfficeBaseLayout(layout: unknown) {
 
   const templateLayout = parsed.data;
   return isPptxBaseLayout(templateLayout) || isDocxBaseLayout(templateLayout);
+}
+
+export async function shouldRegenerateCertificateFile(
+  type: CertificateFileType,
+  layout: unknown,
+  content: Buffer,
+) {
+  if (type !== "PDF") return false;
+  if (!content.subarray(0, 4).equals(Buffer.from("%PDF"))) return true;
+
+  const parsed = templateLayoutSchema.safeParse(layout);
+  if (!parsed.success || !isOfficeBaseLayout(parsed.data)) return false;
+
+  const pdfInfo = await getPdfInfo(content);
+  if (!pdfInfo) return true;
+
+  const expectedPageCount = getExpectedPdfPageCount(parsed.data);
+  if (pdfInfo.pageCount !== expectedPageCount) return true;
+
+  return !pdfFirstPageMatchesLayout(pdfInfo, parsed.data);
 }
 
 export function certificateFileExtension(type: CertificateFileType) {
@@ -92,4 +113,48 @@ function isPptxBaseLayout(layout: TemplateLayout) {
     fileName.endsWith(".pptx") ||
     dataUrl.startsWith("data:application/vnd.openxmlformats-officedocument.presentationml")
   );
+}
+
+function getExpectedPdfPageCount(layout: TemplateLayout) {
+  const basePageCount = layout.basePages?.length ?? 0;
+  const elementPageCount = Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0)) + 1;
+
+  return Math.max(1, basePageCount, elementPageCount);
+}
+
+async function getPdfInfo(pdfBuffer: Buffer) {
+  try {
+    const pdf = await PDFDocument.load(pdfBuffer);
+    const firstPage = pdf.getPage(0);
+    return {
+      pageCount: pdf.getPageCount(),
+      firstPageSize: firstPage.getSize(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function pdfFirstPageMatchesLayout(
+  info: NonNullable<Awaited<ReturnType<typeof getPdfInfo>>>,
+  layout: TemplateLayout,
+) {
+  const expectedPage = layout.basePages?.[0];
+  const expectedWidth = expectedPage?.width || 1123;
+  const expectedHeight = expectedPage?.height || 794;
+  const { width, height } = info.firstPageSize;
+
+  return (
+    dimensionsAreClose(width, height, expectedWidth, expectedHeight) ||
+    dimensionsAreClose(width * 4 / 3, height * 4 / 3, expectedWidth, expectedHeight)
+  );
+}
+
+function dimensionsAreClose(width: number, height: number, expectedWidth: number, expectedHeight: number) {
+  return relativeDifference(width, expectedWidth) <= 0.03 && relativeDifference(height, expectedHeight) <= 0.03;
+}
+
+function relativeDifference(value: number, expected: number) {
+  if (!Number.isFinite(value) || !Number.isFinite(expected) || expected <= 0) return Number.POSITIVE_INFINITY;
+  return Math.abs(value - expected) / expected;
 }
