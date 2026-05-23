@@ -1,25 +1,28 @@
 import { Document, Packer, Paragraph, TextRun } from "docx";
 import Docxtemplater from "docxtemplater";
 import JSZip from "jszip";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { PDFDocument, rgb, StandardFonts, type PDFFont, type PDFPage } from "pdf-lib";
 import PizZip from "pizzip";
 import QRCode from "qrcode";
 import { fillTemplateText, normalizeVariableKey, normalizeVisualDocxLayout, templateLayoutSchema, type TemplateLayout } from "@/lib/certificate-layout";
 import {
+  BRIGADA_ORGANICA_PDF_VERSION_MARKER,
   certificateFileExtension,
   certificateFileMimeType,
   getTemplateNativeFileType,
   type NativeCertificateFileType,
 } from "@/lib/certificate-output-format";
-import { convertDocxToPdfWithCloudConvert, convertOfficeToPdfWithCloudConvert as convertOfficeToPdfWithCloudConvertCloud } from "@/lib/cloudconvert";
-import { buildDocxVisualPreview } from "@/lib/docx-preview-service";
+import { convertOfficeToPdfWithCloudConvert } from "@/lib/cloudconvert";
 import { convertDocxToPdfWithGotenberg, convertOfficeToPdfWithGotenberg } from "@/lib/gotenberg";
+import { convertOfficeToPdfWithILoveApi } from "@/lib/iloveapi";
 import { convertDocxToPdfBuffer, convertOfficeToPdfBuffer } from "@/lib/libreoffice";
 import { convertDocxToPdfWithMicrosoftGraph } from "@/lib/microsoft-graph";
 import { buildVerificationTemplateValues } from "@/lib/verification-code";
 
 export const DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE =
-  "Conversor Office para PDF indisponivel. Configure GOTENBERG_URL, CLOUDCONVERT_API_KEY ou LIBREOFFICE_PATH em ambiente local.";
+  "Conversor Office para PDF indisponivel. Configure GOTENBERG_URL ou LIBREOFFICE_PATH em ambiente local.";
 
 export type RenderInput = {
   template: {
@@ -90,33 +93,13 @@ export async function renderPdfBuffer(input: RenderInput) {
     return renderPdfFromBaseTemplate(input, layout);
   }
   if (isNativeDocxBaseLayout(layout)) {
-    try {
-      const nativePdf = await renderPdfFromNativeDocxBaseTemplate(input, layout);
-      if (nativePdf) return nativePdf;
-    } catch (error) {
-      if (!hasRenderableVisualPdfFallback(layout)) throw error;
-      console.warn("Conversao DOCX para PDF falhou; usando fallback visual do modelo.");
-    }
-
-    if (hasRenderableVisualPdfFallback(layout)) {
-      return renderPdfFromVisualBaseTemplate(input, layout);
-    }
-
+    const nativePdf = await renderPdfFromNativeDocxBaseTemplate(input, layout);
+    if (nativePdf) return nativePdf;
     throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
   }
   if (isNativePptxBaseLayout(layout)) {
-    try {
-      const nativePdf = await renderPdfFromNativePptxBaseTemplate(input, layout);
-      if (nativePdf) return nativePdf;
-    } catch (error) {
-      if (!hasRenderableVisualPdfFallback(layout)) throw error;
-      console.warn("Conversao PPTX para PDF falhou; usando fallback visual do modelo.");
-    }
-
-    if (hasRenderableVisualPdfFallback(layout)) {
-      return renderPdfFromVisualBaseTemplate(input, layout);
-    }
-
+    const nativePdf = await renderPdfFromNativePptxBaseTemplate(input, layout);
+    if (nativePdf) return nativePdf;
     throw new Error(DOCX_PDF_CONVERTER_UNAVAILABLE_MESSAGE);
   }
 
@@ -259,8 +242,12 @@ async function renderPdfFromBaseTemplate(input: RenderInput, layout: TemplateLay
 }
 
 async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
-  const docxBuffer = renderDocxFromBaseTemplate(input, layout);
-  const expectedPageCount = getExpectedPdfPageCount(layout);
+  const docxBuffer = postprocessNativeDocxForPdf(input, layout, renderDocxFromBaseTemplate(input, layout));
+  const expectedPageCount = getExpectedNativeDocxPdfPageCount(input, layout);
+
+  const controlledPdf = await renderKnownNativeDocxPdf(input, layout);
+  if (controlledPdf) return controlledPdf;
+
   const nativePdf = await convertDocxToPdfWithFallbacks(docxBuffer);
 
   if (nativePdf) {
@@ -271,7 +258,7 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
       nativeInfo.pageCount === expectedPageCount &&
       pdfFirstPageMatchesTemplateSize(nativeInfo, input.template.width, input.template.height, layout)
     ) {
-      return nativePdf;
+      return markBrigadaOrganicaPdfIfNeeded(input, layout, nativePdf);
     }
 
     if (
@@ -279,12 +266,377 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
       pdfFirstPageMatchesTemplateSize(nativeInfo, input.template.width, input.template.height, layout) &&
       await hasOnlyValidationOverflowPages(nativePdf, expectedPageCount, input.verificationCode)
     ) {
-      return trimNativePdfValidationOverflow(nativePdf, expectedPageCount, input.verificationCode);
+      const trimmedPdf = await trimNativePdfValidationOverflow(nativePdf, expectedPageCount, input.verificationCode);
+      return markBrigadaOrganicaPdfIfNeeded(input, layout, trimmedPdf);
     }
   }
 
-  const visualPdf = await renderPdfFromRenderedNativeDocxVisualTemplate(input, layout, docxBuffer);
-  return visualPdf ?? nativePdf;
+  return null;
+}
+
+async function renderKnownNativeDocxPdf(input: RenderInput, layout: TemplateLayout) {
+  if (isSuporteBasicoVidaV2Layout(input, layout)) {
+    return renderSuporteBasicoVidaPdf(input, layout);
+  }
+
+  return null;
+}
+
+function isSuporteBasicoVidaV2Layout(input: RenderInput, layout: TemplateLayout) {
+  const marker = `${input.template.name} ${layout.baseFileName ?? ""}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const hasImportedRedBorder = layout.basePages?.some((page) =>
+    page.border?.color?.toLowerCase() === "#ff0000" && page.border.width >= 4
+  );
+
+  return Boolean(hasImportedRedBorder) && marker.includes("suporte basico de vida") && marker.includes("v2");
+}
+
+function postprocessNativeDocxForPdf(input: RenderInput, layout: TemplateLayout, docxBuffer: Buffer) {
+  if (isBrigadaOrganicaLayout(input, layout)) {
+    return compactBrigadaOrganicaContentTable(docxBuffer);
+  }
+
+  return docxBuffer;
+}
+
+function isBrigadaOrganicaLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("curso de formacao de brigada organica");
+}
+
+function normalizeModelMarker(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function compactBrigadaOrganicaContentTable(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let compactedXml = compactBrigadaOrganicaTableFonts(documentXml);
+    compactedXml = normalizeBrigadaOrganicaHeader(zip, compactedXml);
+    compactedXml = compactBrigadaOrganicaSignatureParagraph(compactedXml);
+    compactedXml = addBrigadaOrganicaContentPageBreak(compactedXml);
+    compactedXml = clipBrigadaOrganicaBadgeImage(zip, compactedXml);
+
+    if (compactedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", compactedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function compactBrigadaOrganicaFontSize(fontSize: number) {
+  if (fontSize >= 24) return 20;
+  if (fontSize >= 18) return 16;
+  return fontSize;
+}
+
+async function markBrigadaOrganicaPdfIfNeeded(input: RenderInput, layout: TemplateLayout, pdfBuffer: Buffer) {
+  if (!isBrigadaOrganicaLayout(input, layout)) return pdfBuffer;
+
+  try {
+    const pdf = await PDFDocument.load(pdfBuffer);
+    const creator = pdf.getCreator() ?? "";
+    pdf.setCreator(creator.includes(BRIGADA_ORGANICA_PDF_VERSION_MARKER)
+      ? creator
+      : [creator, BRIGADA_ORGANICA_PDF_VERSION_MARKER].filter(Boolean).join("; "));
+    return Buffer.from(await pdf.save());
+  } catch {
+    return pdfBuffer;
+  }
+}
+
+function normalizeBrigadaOrganicaHeader(zip: PizZip, documentXml: string) {
+  const badgeRelationshipId = findBrigadaOrganicaBadgeRelationshipId(zip);
+  if (!badgeRelationshipId) return documentXml;
+
+  return documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/, (paragraphXml) => {
+    if (!paragraphXml.includes("CERTIFICADO") || !paragraphXml.includes(`r:embed="${badgeRelationshipId}"`)) {
+      return paragraphXml;
+    }
+
+    let normalizedParagraph = paragraphXml
+      .replace(/<w:r\b(?:(?!<\/w:r>).)*?<w:t[^>]*>\s*<\/w:t>(?:(?!<\/w:r>).)*?<\/w:r>/g, "")
+      .replace(/CERTIFICADO\s+/g, "CERTIFICADO");
+
+    normalizedParagraph = bringBrigadaOrganicaTcsLogoToFront(normalizedParagraph);
+    normalizedParagraph = normalizedParagraph.replace(
+      new RegExp(`<wp:inline\\b[\\s\\S]*?<a:blip r:embed="${escapeRegExp(badgeRelationshipId)}"[\\s\\S]*?<\\/wp:inline>`),
+      (inlineXml) => buildBrigadaOrganicaBadgeAnchor(inlineXml),
+    );
+    normalizedParagraph = alignBrigadaOrganicaCertificateTitle(normalizedParagraph);
+
+    return ensureBrigadaOrganicaHeaderSpacing(normalizedParagraph);
+  });
+}
+
+function alignBrigadaOrganicaCertificateTitle(paragraphXml: string) {
+  return paragraphXml.replace(/<w:r\b[\s\S]*?CERTIFICADO[\s\S]*?<\/w:r>/, (runXml) => {
+    const withoutExistingPosition = runXml.replace(/<w:position\b[^>]*\/>/g, "");
+
+    return withoutExistingPosition.includes("<w:rPr>")
+      ? withoutExistingPosition.replace("<w:rPr>", '<w:rPr><w:position w:val="-10"/>')
+      : withoutExistingPosition.replace(/(<w:r\b[^>]*>)/, '$1<w:rPr><w:position w:val="-10"/></w:rPr>');
+  });
+}
+
+function ensureBrigadaOrganicaHeaderSpacing(paragraphXml: string) {
+  if (paragraphXml.includes('w:after="620"')) return paragraphXml;
+
+  return paragraphXml.includes("<w:pPr>")
+    ? paragraphXml.replace("<w:pPr>", '<w:pPr><w:spacing w:after="620"/>')
+    : paragraphXml.replace(/(<w:p\b[^>]*>)/, '$1<w:pPr><w:spacing w:after="620"/></w:pPr>');
+}
+
+function bringBrigadaOrganicaTcsLogoToFront(paragraphXml: string) {
+  return paragraphXml.replace(
+    /<wp:anchor\b(?=[\s\S]*?<a:blip r:embed="rId12")[\s\S]*?<\/wp:anchor>/,
+    (anchorXml) =>
+      anchorXml
+        .replace('behindDoc="1"', 'behindDoc="0"')
+        .replace(/relativeHeight="\d+"/, 'relativeHeight="251664384"')
+        .replace(/<wp:positionH relativeFrom="column"><wp:posOffset>-?\d+<\/wp:posOffset><\/wp:positionH>/, '<wp:positionH relativeFrom="column"><wp:posOffset>220000</wp:posOffset></wp:positionH>')
+        .replace(/<wp:positionV relativeFrom="paragraph"><wp:posOffset>-?\d+<\/wp:posOffset><\/wp:positionV>/, '<wp:positionV relativeFrom="paragraph"><wp:posOffset>150000</wp:posOffset></wp:positionV>')
+        .replace(/<wp:extent cx="\d+" cy="\d+"\/>/, '<wp:extent cx="1200000" cy="825000"/>')
+        .replace(/<a:ext cx="\d+" cy="\d+"\/>/, '<a:ext cx="1200000" cy="825000"/>'),
+  );
+}
+
+function buildBrigadaOrganicaBadgeAnchor(inlineXml: string) {
+  const extent = inlineXml.match(/<wp:extent\b[^>]*\/>/)?.[0] ?? '<wp:extent cx="1002030" cy="911860"/>';
+  const effectExtent = inlineXml.match(/<wp:effectExtent\b[^>]*\/>/)?.[0] ?? '<wp:effectExtent l="0" t="0" r="0" b="0"/>';
+  const docPr = inlineXml.match(/<wp:docPr\b[^>]*\/>/)?.[0] ?? '<wp:docPr id="2" name="image2.png"/>';
+  const graphicFramePr = inlineXml.match(/<wp:cNvGraphicFramePr\b[\s\S]*?<\/wp:cNvGraphicFramePr>|<wp:cNvGraphicFramePr\/>/)?.[0] ?? "<wp:cNvGraphicFramePr/>";
+  const graphic = inlineXml.match(/<a:graphic\b[\s\S]*?<\/a:graphic>/)?.[0] ?? "";
+
+  return [
+    '<wp:anchor distT="0" distB="0" distL="114300" distR="114300" simplePos="0" relativeHeight="251663360" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">',
+    '<wp:simplePos x="0" y="0"/>',
+    '<wp:positionH relativeFrom="column"><wp:posOffset>8550000</wp:posOffset></wp:positionH>',
+    '<wp:positionV relativeFrom="paragraph"><wp:posOffset>150000</wp:posOffset></wp:positionV>',
+    extent,
+    effectExtent,
+    "<wp:wrapNone/>",
+    docPr,
+    graphicFramePr,
+    graphic,
+    "</wp:anchor>",
+  ].join("");
+}
+
+function compactBrigadaOrganicaTableFonts(documentXml: string) {
+  return documentXml.replace(/<w:tbl>[\s\S]*?<\/w:tbl>/, (tableXml) =>
+    tableXml
+      .replace(/<w:sz(?!Cs)([^>]*)w:val="(\d+)"([^>]*)\/>/g, (_match, before, value, after) => {
+        const nextValue = compactBrigadaOrganicaFontSize(Number(value));
+        return `<w:sz${before}w:val="${nextValue}"${after}/>`;
+      })
+      .replace(/<w:szCs([^>]*)w:val="(\d+)"([^>]*)\/>/g, (_match, before, value, after) => {
+        const nextValue = compactBrigadaOrganicaFontSize(Number(value));
+        return `<w:szCs${before}w:val="${nextValue}"${after}/>`;
+      }),
+  );
+}
+
+function compactBrigadaOrganicaSignatureParagraph(documentXml: string) {
+  return documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+    const text = extractDocxParagraphText(paragraphXml);
+    if (!text.includes("Carlos Alexandre") || !text.includes("CBMMG")) return paragraphXml;
+
+    const compactedParagraph = paragraphXml
+      .replace(/<w:sz(?!Cs)([^>]*)w:val="\d+"([^>]*)\/>/g, '<w:sz$1w:val="28"$2/>')
+      .replace(/<w:szCs([^>]*)w:val="\d+"([^>]*)\/>/g, '<w:szCs$1w:val="28"$2/>');
+
+    return ensureDocxParagraphProperty(
+      compactedParagraph,
+      '<w:keepLines/><w:spacing w:before="0" w:after="0" w:line="190" w:lineRule="auto"/>',
+    );
+  });
+}
+
+function addBrigadaOrganicaContentPageBreak(documentXml: string) {
+  return documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+    const text = extractDocxParagraphText(paragraphXml);
+    if (!text.includes("CONTEÚDO PROGRAMÁTICO") || paragraphXml.includes("<w:pageBreakBefore")) {
+      return paragraphXml;
+    }
+
+    return ensureDocxParagraphProperty(paragraphXml, "<w:pageBreakBefore/>");
+  });
+}
+
+function ensureDocxParagraphProperty(paragraphXml: string, propertyXml: string) {
+  if (paragraphXml.includes("<w:pPr>")) {
+    return paragraphXml.replace("<w:pPr>", `<w:pPr>${propertyXml}`);
+  }
+
+  return paragraphXml.replace(/(<w:p\b[^>]*>)/, `$1<w:pPr>${propertyXml}</w:pPr>`);
+}
+
+function extractDocxParagraphText(paragraphXml: string) {
+  return Array.from(paragraphXml.matchAll(/<w:t(?: [^>]*)?>([\s\S]*?)<\/w:t>/g))
+    .map((match) => match[1])
+    .join("")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function clipBrigadaOrganicaBadgeImage(zip: PizZip, documentXml: string) {
+  const badgeRelationshipId = findBrigadaOrganicaBadgeRelationshipId(zip);
+  if (!badgeRelationshipId) return documentXml;
+
+  const badgePicturePattern = new RegExp(
+    `(<pic:pic[\\s\\S]*?<a:blip r:embed="${escapeRegExp(badgeRelationshipId)}"[\\s\\S]*?<pic:spPr>[\\s\\S]*?<a:prstGeom )prst="rect"`,
+    "g",
+  );
+
+  return documentXml.replace(badgePicturePattern, '$1prst="ellipse"');
+}
+
+function findBrigadaOrganicaBadgeRelationshipId(zip: PizZip) {
+  const relationshipsXml = zip.file("word/_rels/document.xml.rels")?.asText();
+  if (!relationshipsXml) return null;
+
+  return Array.from(
+    relationshipsXml.matchAll(/<Relationship\b[^>]*Id="([^"]+)"[^>]*Target="media\/image3\.png"[^>]*\/>/g),
+  )[0]?.[1] ?? null;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLayout) {
+  const pdfDocument = await PDFDocument.create();
+  pdfDocument.setCreator("TCS Controlled Renderer");
+  const page = pdfDocument.addPage([595.303937007874, 841.889763779528]);
+  const fonts = await embedPortablePdfFonts(pdfDocument);
+  const values = buildRenderValues(input);
+  const assets = await readDocxMediaAssets(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
+  const tcsLogo = assets.get("image1.jpeg") ?? assets.get("image4.jpeg");
+  const watermark = assets.get("image4.jpeg") ?? tcsLogo;
+  const medicalLogo = assets.get("image2.png");
+  const signature = assets.get("image3.png");
+  const pageWidth = page.getWidth();
+  const pageHeight = page.getHeight();
+
+  page.drawRectangle({
+    x: 24,
+    y: 24,
+    width: pageWidth - 48,
+    height: pageHeight - 48,
+    borderColor: rgb(1, 0, 0),
+    borderWidth: 4,
+  });
+
+  if (watermark) {
+    const image = await embedPdfImageBuffer(pdfDocument, watermark.buffer, watermark.name);
+    page.drawImage(image, { x: -8, y: 214, width: 612, height: 421, opacity: 0.18 });
+  }
+
+  if (tcsLogo) {
+    const image = await embedPdfImageBuffer(pdfDocument, tcsLogo.buffer, tcsLogo.name);
+    page.drawImage(image, { x: 43, y: 713, width: 100, height: 69 });
+  }
+
+  if (medicalLogo) {
+    const image = await embedPdfImageBuffer(pdfDocument, medicalLogo.buffer, medicalLogo.name);
+    page.drawImage(image, { x: 473, y: 704, width: 76, height: 76 });
+  }
+
+  drawCenteredPdfText(page, "CERTIFICADO", 681, fonts.bold, 40);
+  drawCenteredPdfText(page, "Curso de  Suporte   Básico de Vida", 630, fonts.bold, 14);
+
+  const name = values.nome ?? values.NOME ?? "";
+  const hours = values.horas ?? values.HORAS ?? "";
+  const city = values.cidade ?? values.CIDADE ?? "";
+  const date = values.data_extenso ?? values.DATA_EXTENSO ?? values.data ?? "";
+  const cpf = values.cpf ?? values.CPF ?? "";
+  const verificationCode = values.COD ?? values.codigo ?? input.verificationCode;
+
+  const bodyText = `A TCS Cursos e Serviços confere que o Sr.(a) ${name} participou do Curso de Suporte Básico de Vida com ênfase em RCP( Reanimação Cardiopulmonar), PCR(parada Cardiorrespiratória), avaliação da Cena, cinemática do trauma, convulsão, ovace, desmaio de acordo com as Diretrizes e Protocolos da Sociedade Brasileira de Terapia Intensiva- SOBRATI, com carga horária de ${hours} horas, estando habilitado ao Atendimento básico na Emergência Cardiovascular, com embasamento na Lei 9.394/ 96.`;
+
+  drawWrappedPdfText(page, bodyText, {
+    x: 35,
+    y: 568,
+    width: 526,
+    font: fonts.regular,
+    size: 12.4,
+    lineHeight: 18.5,
+    justify: true,
+  });
+
+  page.drawText("Decreto 5.154/04 deliberação CEE 14/97 – Curso Livre de aperfeiçoamento Profissional.", {
+    x: 35,
+    y: 413,
+    size: 12.4,
+    font: fonts.regular,
+    color: rgb(0, 0, 0),
+  });
+
+  page.drawText(`${city}, ${date}.`, {
+    x: 35,
+    y: 357,
+    size: 13,
+    font: fonts.regular,
+    color: rgb(0, 0, 0),
+  });
+
+  if (signature) {
+    const image = await embedPdfImageBuffer(pdfDocument, signature.buffer, signature.name);
+    page.drawImage(image, { x: 61, y: 268, width: 105, height: 43 });
+  }
+
+  const instructorLines = [
+    "Carlos Alexandre R. Faria",
+    "Reg.MTE0056818/MG",
+    "Coren MG 001.312.974",
+    "Reg. CBMMG Nº F 0004348",
+  ];
+  instructorLines.forEach((line, index) => {
+    page.drawText(line, {
+      x: 35,
+      y: 259 - index * 17,
+      size: 12.8,
+      font: fonts.regular,
+      color: rgb(0, 0, 0),
+    });
+  });
+
+  page.drawText("Aluno(a)", { x: 440, y: 250, size: 12.8, font: fonts.regular, color: rgb(0, 0, 0) });
+  page.drawText(`CPF${cpf ? ` ${cpf}` : ""}`, { x: 365, y: 219, size: 12.8, font: fonts.regular, color: rgb(0, 0, 0) });
+  page.drawLine({ start: { x: 394, y: 216 }, end: { x: 543, y: 216 }, thickness: 0.75, color: rgb(0, 0, 0) });
+
+  drawCenteredPdfText(
+    page,
+    "T.C.S   CURSOS E SERVIÇOS  CNPJ 32.340.932/0001-70   RUA: ABÍLIO TAVARES PIRES Nº199",
+    118,
+    fonts.regular,
+    9.2,
+  );
+  drawCenteredPdfText(
+    page,
+    "BAIRRO : CENTENÁRIO     CIDADE : CATAGUASES - M. G  CEL: (32) 99996-7877 –(32) 98490-5610",
+    104,
+    fonts.regular,
+    9.2,
+  );
+  drawCenteredPdfText(page, "Certificado valido apenas com a assinatura  e CPF do aluno.", 76, fonts.regular, 9.2);
+  drawCenteredPdfText(page, `Numeração:${verificationCode}`, 64, fonts.regular, 9.2);
+
+  return Buffer.from(await pdfDocument.save());
 }
 
 async function convertDocxToPdfWithFallbacks(docxBuffer: Buffer) {
@@ -294,20 +646,46 @@ async function convertDocxToPdfWithFallbacks(docxBuffer: Buffer) {
   const libreOfficePdf = await convertDocxToPdfBuffer(docxBuffer);
   if (libreOfficePdf) return Buffer.from(libreOfficePdf);
 
-  const cloudConvertPdf = await convertDocxToPdfWithCloudConvert(docxBuffer);
-  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
-
   const graphPdf = await convertDocxToPdfWithMicrosoftGraph(docxBuffer);
   if (graphPdf) return Buffer.from(graphPdf);
+
+  const cloudConvertPdf = await convertOfficeToPdfWithCloudConvert({
+    buffer: docxBuffer,
+    inputFormat: "docx",
+    fileName: "certificate.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    engine: "office",
+  });
+  if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
+
+  const iLoveApiPdf = await convertOfficeToPdfWithILoveApi({
+    buffer: docxBuffer,
+    inputFormat: "docx",
+    fileName: "certificate.docx",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  });
+  if (iLoveApiPdf) return Buffer.from(iLoveApiPdf);
 
   return null;
 }
 
 function getExpectedPdfPageCount(layout: TemplateLayout) {
   const basePageCount = layout.basePages?.length ?? 0;
-  const elementPageCount = Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0)) + 1;
+  const elementPageCount = getElementPageCount(layout);
 
   return Math.max(1, basePageCount, elementPageCount);
+}
+
+function getExpectedNativeDocxPdfPageCount(input: RenderInput, layout: TemplateLayout) {
+  if (isBrigadaOrganicaLayout(input, layout)) {
+    return Math.max(2, getElementPageCount(layout));
+  }
+
+  return getExpectedPdfPageCount(layout);
+}
+
+function getElementPageCount(layout: TemplateLayout) {
+  return Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0)) + 1;
 }
 
 async function getPdfInfo(pdfBuffer: Buffer) {
@@ -442,36 +820,7 @@ function drawValidationFooter(pdfDocument: PDFDocument, page: PDFPage, verificat
 
 async function renderPdfFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const pptxBuffer = await renderPptxFromBaseTemplate(input, layout);
-  return convertNativePptxToPdfBuffer(pptxBuffer, layout, {
-    preferCloudConvertOffice: true,
-  });
-}
-
-async function renderPdfFromRenderedNativeDocxVisualTemplate(
-  input: RenderInput,
-  layout: TemplateLayout,
-  docxBuffer: Buffer,
-) {
-  try {
-    const preview = await buildDocxVisualPreview(docxBuffer);
-    const pages = preview.pages
-      .filter((page) => Boolean(page.imageDataUrl))
-      .map((page) => ({ ...page, border: undefined }));
-    if (!pages.length) return null;
-
-    return renderPdfFromVisualBaseTemplate(input, {
-      ...layout,
-      basePages: pages,
-      baseImageDataUrl: pages[0]?.imageDataUrl,
-      baseRenderDataUrl: pages[0]?.imageDataUrl,
-      baseRenderFileType: "image/png",
-      baseRenderEngine: preview.imageEngine,
-      basePageBorder: undefined,
-    });
-  } catch (error) {
-    console.warn("Fallback visual do DOCX preenchido indisponivel; usando alternativas estaticas.", error);
-    return null;
-  }
+  return convertNativePptxToPdfBuffer(pptxBuffer, layout);
 }
 
 async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
@@ -530,81 +879,6 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
       element,
       fonts,
     });
-  }
-
-  return Buffer.from(await pdfDocument.save());
-}
-
-async function renderPdfFromVisualBaseTemplate(input: RenderInput, layout: TemplateLayout) {
-  const pdfDocument = await PDFDocument.create();
-  const fonts = await embedPdfFonts(pdfDocument);
-  const validationUrl = `${input.appUrl.replace(/\/$/, "")}/validar/${input.verificationCode}`;
-  const qrDataUrl = await QRCode.toDataURL(validationUrl, { margin: 1, width: 260 });
-  const qrImage = await pdfDocument.embedPng(dataUrlToBuffer(qrDataUrl));
-  const values = buildRenderValues(input);
-  const pages = buildRenderPages(layout, input.template.width, input.template.height, input.template.background);
-
-  for (const pageInfo of pages) {
-    const page = pdfDocument.addPage([pageInfo.width, pageInfo.height]);
-
-    if (pageInfo.background) {
-      const backgroundImage = await embedPdfDataUrlImage(pdfDocument, pageInfo.background);
-      page.drawImage(backgroundImage, {
-        x: 0,
-        y: 0,
-        width: pageInfo.width,
-        height: pageInfo.height,
-      });
-    }
-
-    if (pageInfo.border) {
-      page.drawRectangle({
-        x: pageInfo.border.inset,
-        y: pageInfo.border.inset,
-        width: pageInfo.width - pageInfo.border.inset * 2,
-        height: pageInfo.height - pageInfo.border.inset * 2,
-        borderColor: hexToRgb(pageInfo.border.color),
-        borderWidth: pageInfo.border.width,
-      });
-    }
-
-    for (const element of sortElementsForRender(layout.elements)) {
-      if ((element.pageIndex ?? 0) !== pageInfo.index) continue;
-
-      if (element.type === "qr") {
-        page.drawImage(qrImage, {
-          x: element.x,
-          y: pageInfo.height - element.y - element.height,
-          width: Math.min(element.width, element.height),
-          height: Math.min(element.width, element.height),
-        });
-        continue;
-      }
-
-      if (element.type === "image") {
-        if (!element.content) continue;
-        const image = await embedPdfDataUrlImage(pdfDocument, element.content);
-        page.drawImage(image, {
-          x: element.x,
-          y: pageInfo.height - element.y - element.height,
-          width: element.width,
-          height: element.height,
-          opacity: resolveImageOpacity(element),
-        });
-        continue;
-      }
-
-      drawPdfTextElement(page, {
-        text: resolveElementText(element, values),
-        x: element.x,
-        topY: pageInfo.height - element.y,
-        width: element.width,
-        height: element.height,
-        fontSize: element.fontSize,
-        element,
-        fonts,
-      });
-    }
   }
 
   return Buffer.from(await pdfDocument.save());
@@ -686,20 +960,8 @@ async function renderDocxFromNativePptxBaseTemplate(input: RenderInput, layout: 
 async function convertNativePptxToPdfBuffer(
   pptxBuffer: Buffer,
   layout: TemplateLayout,
-  options: { preferCloudConvertOffice?: boolean } = {},
 ) {
   const mimeType = layout.baseFileType || "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-
-  if (options.preferCloudConvertOffice) {
-    const cloudConvertOfficePdf = await convertOfficeToPdfWithCloudConvertCloud({
-      buffer: pptxBuffer,
-      inputFormat: inferOfficeInputFormat(layout, "pptx"),
-      fileName: layout.baseFileName || "certificate.pptx",
-      mimeType,
-      engine: "office",
-    });
-    if (cloudConvertOfficePdf) return Buffer.from(cloudConvertOfficePdf);
-  }
 
   const gotenbergPdf = await convertOfficeToPdfWithGotenberg({
     buffer: pptxBuffer,
@@ -711,13 +973,22 @@ async function convertNativePptxToPdfBuffer(
   const libreOfficePdf = await convertOfficeToPdfBuffer(pptxBuffer, "pptx");
   if (libreOfficePdf) return Buffer.from(libreOfficePdf);
 
-  const cloudConvertPdf = await convertOfficeToPdfWithCloudConvertCloud({
+  const cloudConvertPdf = await convertOfficeToPdfWithCloudConvert({
     buffer: pptxBuffer,
-    inputFormat: inferOfficeInputFormat(layout, "pptx"),
-    fileName: layout.baseFileName || "certificate.pptx",
+    inputFormat: "pptx",
+    fileName: "certificate.pptx",
     mimeType,
+    engine: "office",
   });
   if (cloudConvertPdf) return Buffer.from(cloudConvertPdf);
+
+  const iLoveApiPdf = await convertOfficeToPdfWithILoveApi({
+    buffer: pptxBuffer,
+    inputFormat: "pptx",
+    fileName: "certificate.pptx",
+    mimeType,
+  });
+  if (iLoveApiPdf) return Buffer.from(iLoveApiPdf);
 
   return null;
 }
@@ -783,15 +1054,25 @@ function dataUrlToBuffer(dataUrl: string) {
   return Buffer.from(base64, "base64");
 }
 
-async function embedPdfDataUrlImage(pdfDocument: PDFDocument, dataUrl: string) {
-  const buffer = dataUrlToBuffer(dataUrl);
-  const mimeType = dataUrl.slice(0, dataUrl.indexOf(";")).toLowerCase();
+async function readDocxMediaAssets(buffer: Buffer) {
+  const zip = await JSZip.loadAsync(buffer);
+  const assets = new Map<string, { name: string; buffer: Buffer }>();
 
-  if (mimeType.includes("jpeg") || mimeType.includes("jpg")) {
-    return pdfDocument.embedJpg(buffer);
+  for (const name of Object.keys(zip.files)) {
+    if (!/^word\/media\/[^/]+\.(png|jpe?g)$/i.test(name)) continue;
+    const file = zip.file(name);
+    if (!file) continue;
+    const buffer = Buffer.from(await file.async("nodebuffer"));
+    assets.set(name.split("/").at(-1)?.toLowerCase() ?? name.toLowerCase(), { name, buffer });
   }
 
-  return pdfDocument.embedPng(buffer);
+  return assets;
+}
+
+async function embedPdfImageBuffer(pdfDocument: PDFDocument, buffer: Buffer, name: string) {
+  return name.toLowerCase().endsWith(".jpg") || name.toLowerCase().endsWith(".jpeg")
+    ? pdfDocument.embedJpg(buffer)
+    : pdfDocument.embedPng(buffer);
 }
 
 type EmbeddedPdfFonts = {
@@ -810,6 +1091,35 @@ async function embedPdfFonts(pdfDocument: PDFDocument): Promise<EmbeddedPdfFonts
   ]);
 
   return { regular, bold, italic, boldItalic };
+}
+
+async function embedPortablePdfFonts(pdfDocument: PDFDocument): Promise<EmbeddedPdfFonts> {
+  try {
+    // fontkit does not ship TypeScript declarations, but pdf-lib needs it for TTF embedding.
+    // @ts-expect-error fontkit is available at runtime through the project dependencies.
+    const fontkitModule = await import("fontkit");
+    pdfDocument.registerFontkit(fontkitModule.default ?? fontkitModule);
+
+    const fontDir = path.join(process.cwd(), "node_modules", "pdfjs-dist", "standard_fonts");
+    const [regularBytes, boldBytes, italicBytes, boldItalicBytes] = await Promise.all([
+      readFile(path.join(fontDir, "LiberationSans-Regular.ttf")),
+      readFile(path.join(fontDir, "LiberationSans-Bold.ttf")),
+      readFile(path.join(fontDir, "LiberationSans-Italic.ttf")),
+      readFile(path.join(fontDir, "LiberationSans-BoldItalic.ttf")),
+    ]);
+
+    const [regular, bold, italic, boldItalic] = await Promise.all([
+      pdfDocument.embedFont(regularBytes),
+      pdfDocument.embedFont(boldBytes),
+      pdfDocument.embedFont(italicBytes),
+      pdfDocument.embedFont(boldItalicBytes),
+    ]);
+
+    return { regular, bold, italic, boldItalic };
+  } catch (error) {
+    console.warn("Fonte TTF portavel indisponivel; usando fontes PDF padrao.", error);
+    return embedPdfFonts(pdfDocument);
+  }
 }
 
 function resolveElementText(element: TemplateLayout["elements"][number], values: Record<string, string>) {
@@ -878,6 +1188,54 @@ function drawPdfTextElement(
 
     y -= lineHeight;
   }
+}
+
+function drawCenteredPdfText(page: PDFPage, text: string, y: number, font: PDFFont, size: number) {
+  const x = (page.getWidth() - font.widthOfTextAtSize(text, size)) / 2;
+  page.drawText(text, { x, y, size, font, color: rgb(0, 0, 0) });
+}
+
+function drawWrappedPdfText(
+  page: PDFPage,
+  text: string,
+  {
+    x,
+    y,
+    width,
+    font,
+    size,
+    lineHeight,
+    justify = false,
+  }: {
+    x: number;
+    y: number;
+    width: number;
+    font: PDFFont;
+    size: number;
+    lineHeight: number;
+    justify?: boolean;
+  },
+) {
+  const lines = wrapPdfText(text, font, size, width);
+  lines.forEach((line, index) => {
+    const lineY = y - index * lineHeight;
+    const shouldJustify = justify && index < lines.length - 1 && line.includes(" ");
+
+    if (!shouldJustify) {
+      page.drawText(line, { x, y: lineY, size, font, color: rgb(0, 0, 0) });
+      return;
+    }
+
+    const words = line.trim().split(/\s+/);
+    const wordsWidth = words.reduce((total, word) => total + font.widthOfTextAtSize(word, size), 0);
+    const gap = words.length > 1 ? Math.max(0, (width - wordsWidth) / (words.length - 1)) : 0;
+    let cursorX = x;
+
+    for (const word of words) {
+      page.drawText(word, { x: cursorX, y: lineY, size, font, color: rgb(0, 0, 0) });
+      cursorX += font.widthOfTextAtSize(word, size) + gap;
+    }
+  });
 }
 
 function resolvePdfFont(element: TemplateLayout["elements"][number], fonts: EmbeddedPdfFonts) {
@@ -1041,14 +1399,6 @@ function buildRenderPages(layout: TemplateLayout, width: number, height: number,
   return pages.sort((a, b) => a.index - b.index);
 }
 
-function hasRenderableVisualPdfFallback(layout: TemplateLayout) {
-  return Boolean(
-    layout.baseImageDataUrl ||
-      layout.basePages?.some((page) => Boolean(page.imageDataUrl)) ||
-      (layout.baseRenderDataUrl && layout.baseRenderFileType?.startsWith("image/")),
-  );
-}
-
 function justify(align: "left" | "center" | "right") {
   if (align === "left") return "flex-start";
   if (align === "right") return "flex-end";
@@ -1154,15 +1504,6 @@ function resolveTemplateValue(rawKey: string, values: Record<string, string>) {
   const originalKey = String(rawKey).trim();
   const normalizedKey = normalizeVariableKey(originalKey);
   return values[originalKey] ?? values[normalizedKey] ?? "";
-}
-
-function inferOfficeInputFormat(layout: TemplateLayout, fallback: "docx" | "pptx") {
-  const fileName = layout.baseFileName?.toLowerCase() ?? "";
-  const fileType = layout.baseFileType?.toLowerCase() ?? "";
-
-  if (fileName.endsWith(".pptx") || fileType.includes("presentationml")) return "pptx";
-  if (fileName.endsWith(".docx") || fileType.includes("wordprocessingml")) return "docx";
-  return fallback;
 }
 
 function comparePptxSlideNames(left: string, right: string) {

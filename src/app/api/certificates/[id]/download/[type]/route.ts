@@ -19,6 +19,7 @@ import {
   renderPptxBuffer,
 } from "@/lib/render-certificate";
 import { downloadCertificateFile } from "@/lib/supabase";
+import { refreshDocxTemplatePreviewIfNeeded } from "@/lib/template-preview-refresh";
 
 const PDF_CONVERTER_UNAVAILABLE_USER_MESSAGE =
   "Nao foi possivel gerar o PDF deste certificado agora. Baixe o arquivo nativo do modelo enquanto a conversao para PDF e configurada no servidor.";
@@ -138,9 +139,11 @@ async function findIssueForDownload(issueId: string, type: CertificateFileType) 
       recipient: { select: { name: true } },
       template: {
         select: {
+          id: true,
           name: true,
           width: true,
           height: true,
+          orientation: true,
           background: true,
           layout: true,
         },
@@ -170,7 +173,8 @@ type RegeneratedCertificateFile = {
 async function regenerateFileContent(issue: DownloadIssue, type: CertificateFileType): Promise<RegeneratedCertificateFile> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const values = readStringValues(issue.values);
-  const renderInput = { template: issue.template, values, verificationCode: issue.verificationCode, appUrl };
+  const template = await refreshDocxTemplatePreviewIfNeeded(issue.template);
+  const renderInput = { template, values, verificationCode: issue.verificationCode, appUrl };
   const content = type === "DOCX"
     ? await renderDocxBuffer(renderInput)
     : type === "PPTX"

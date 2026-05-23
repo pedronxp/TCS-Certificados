@@ -7,17 +7,18 @@ import { PDFDocument } from "pdf-lib";
 import { extractVariableKeys, type TemplateBaseAsset, type TemplateElement, type TemplatePageBorder } from "@/lib/certificate-layout";
 import { convertDocxToPdfWithGotenberg } from "@/lib/gotenberg";
 import { convertDocxToPdfBuffer } from "@/lib/libreoffice";
+import { convertOfficeToPdfWithCloudConvert } from "@/lib/cloudconvert";
+import { convertOfficeToPdfWithILoveApi } from "@/lib/iloveapi";
 
 /**
  * DocxPreviewService — Serviço de preview DOCX para o editor
  *
- * Cadeia de conversão (prioridade):
- * 1. Gotenberg (motor primário — Open Source, hospedado gratuitamente)
- * 2. LibreOffice local (fallback em dev, quando disponível)
- * 3. docx-preview.js via Playwright (fallback visual se nenhum PDF disponível)
- *
- * Nota: CloudConvert e Microsoft Graph foram removidos em favor
- * de uma stack 100% Open Source.
+ * Cadeia de importacao/preview (prioridade):
+ * 1. Gotenberg (motor Docker/Open Source hospedado)
+ * 2. LibreOffice local (fallback em dev, quando disponivel)
+ * 3. CloudConvert Office quando permitido
+ * 4. iLoveAPI Office quando CloudConvert nao estiver disponivel
+ * 5. docx-preview.js via Playwright (fallback visual se nenhum PDF disponivel)
  */
 
 export type DocxPreviewPage = {
@@ -51,7 +52,7 @@ const PDF_POINTS_TO_CSS_PIXELS = 4 / 3;
 
 export async function buildDocxPreview(
   buffer: Buffer,
-  options: { assets?: TemplateBaseAsset[] } = {},
+  options: { assets?: TemplateBaseAsset[]; allowExternalConversion?: boolean } = {},
 ): Promise<DocxPreviewResult> {
   const workingBuffer = await applyDocxAssetReplacements(buffer, options.assets);
   const [rawText, page] = await Promise.all([
@@ -59,13 +60,33 @@ export async function buildDocxPreview(
     extractDocxPage(workingBuffer),
   ]);
 
-  // ── Motor primário: Gotenberg (Open Source) ──
+  // ── Motor proprio/infra: mesma funcao do CloudConvert, mas sem depender de API externa. ──
   const gotenbergPdf = await convertDocxToPdfWithGotenberg(workingBuffer);
 
-  // ── Fallback dev: LibreOffice local ──
+  // ── Fallback dev/local: LibreOffice direto quando disponivel no host. ──
   const libreOfficePdf = gotenbergPdf ? null : await convertDocxToPdfBuffer(workingBuffer);
 
-  const nativePdf = gotenbergPdf ?? libreOfficePdf;
+  // ── APIs externas: usadas so quando o motor proprio nao conseguiu converter. ──
+  const cloudConvertPdf = options.allowExternalConversion && !gotenbergPdf && !libreOfficePdf
+    ? await convertOfficeToPdfWithCloudConvert({
+        buffer: workingBuffer,
+        inputFormat: "docx",
+        fileName: "template.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        engine: "office",
+      })
+    : null;
+  const iLoveApiPdf = options.allowExternalConversion && !cloudConvertPdf
+      && !gotenbergPdf && !libreOfficePdf
+    ? await convertOfficeToPdfWithILoveApi({
+        buffer: workingBuffer,
+        inputFormat: "docx",
+        fileName: "template.docx",
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      })
+    : null;
+
+  const nativePdf = gotenbergPdf ?? libreOfficePdf ?? cloudConvertPdf ?? iLoveApiPdf;
   const assets = mergeAssetReplacements(
     await extractDocxMediaAssets(buffer),
     options.assets,
@@ -94,9 +115,13 @@ export async function buildDocxPreview(
     ? "gotenberg"
     : libreOfficePdf
       ? "libreoffice"
-      : fallbackImageDataUrl
-        ? "docx-preview-api"
-        : "";
+      : cloudConvertPdf
+        ? "cloudconvert-office"
+        : iLoveApiPdf
+          ? "iloveapi-office"
+          : fallbackImageDataUrl
+            ? "docx-preview-api"
+            : "";
 
   // Se nenhum motor conseguiu converter, sinaliza para o frontend
   const converterOffline = !nativePdf && !fallbackImageDataUrl;
@@ -400,16 +425,26 @@ async function renderDocxPagePreview(buffer: Buffer, page: DocxPreviewPage) {
       if (renderedPages.length === 1 && renderedPage.height > page.height * 1.2) {
         const pageCount = Math.max(1, Math.ceil(renderedPage.height / page.height));
 
+        const splitBounds = {
+          width: screenshotBounds.width,
+          height: Math.max(screenshotBounds.height, renderedPage.y + pageCount * page.height),
+        };
+        await tab.evaluate((minHeight) => {
+          document.body.style.minHeight = `${minHeight}px`;
+        }, splitBounds.height);
+        await tab.setViewportSize({
+          width: Math.min(16384, Math.max(page.width, splitBounds.width)),
+          height: Math.min(16384, Math.max(page.height, splitBounds.height)),
+        });
+
         for (let index = 0; index < pageCount; index += 1) {
           const clipY = renderedPage.y + index * page.height;
-          const remainingHeight = Math.max(1, renderedPage.y + renderedPage.height - clipY);
-          const clipHeight = Math.min(page.height, remainingHeight);
           const clip = clampScreenshotClip({
             x: renderedPage.x,
             y: clipY,
             width: renderedPage.width,
-            height: clipHeight,
-          }, screenshotBounds);
+            height: page.height,
+          }, splitBounds);
           if (!clip) continue;
 
           const screenshot = await tab.screenshot({
@@ -505,7 +540,11 @@ function extractRenderedDocxPages(fallbackPage: DocxPreviewPage) {
   return pages.map((pageElement, index) => {
     const rect = pageElement.getBoundingClientRect();
     const width = Math.max(1, Math.round(rect.width || fallbackPage.width));
-    const height = Math.max(1, Math.round(rect.height || fallbackPage.height));
+    const height = Math.max(
+      1,
+      pageElements.length > 1 ? fallbackPage.height : 0,
+      Math.round(rect.height || fallbackPage.height),
+    );
 
     return {
       index,

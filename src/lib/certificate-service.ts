@@ -25,6 +25,7 @@ import {
   generateVerificationCode,
   isSystemCertificateVariableKey,
 } from "@/lib/verification-code";
+import { refreshDocxTemplatePreviewIfNeeded } from "@/lib/template-preview-refresh";
 
 const CERTIFICATE_SEQUENCE_ID = "global";
 
@@ -80,8 +81,9 @@ export async function issueCertificate({
   const recipientEmail = findValue(normalizedValues, ["email", "e_mail"]) || undefined;
   const recipientDocument = findDocumentValue(normalizedValues);
   const normalizedOutputMode = normalizeCertificateOutputMode(outputMode);
+  const templateForRender = await refreshDocxTemplatePreviewIfNeeded(template);
 
-  const renderInput = { template, values: normalizedValues.original, verificationCode, appUrl };
+  const renderInput = { template: templateForRender, values: normalizedValues.original, verificationCode, appUrl };
   const nativeFile = await renderNativeCertificateBuffer(renderInput);
   const pdf = await renderPdfBufferSafely(renderInput);
   const pdfFilename = `${recipientName}-${verificationCode}.pdf`;
@@ -183,8 +185,9 @@ export async function renderCertificatePreviewPdf({
   const normalizedValues = normalizeIssueValues(normalizeTemplateFieldValues(previewReadyValues, template.variables));
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const previewCode = "PREVIA";
+  const templateForRender = await refreshDocxTemplatePreviewIfNeeded(template);
   const pdf = await renderPdfBufferSafely({
-    template,
+    template: templateForRender,
     values: normalizedValues.original,
     verificationCode: previewCode,
     appUrl,

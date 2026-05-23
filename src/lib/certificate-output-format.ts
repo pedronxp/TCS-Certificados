@@ -8,6 +8,7 @@ export type CertificateOutputMode = "EDITABLE" | "NON_EDITABLE";
 export const DEFAULT_CERTIFICATE_OUTPUT_MODE: CertificateOutputMode = "EDITABLE";
 export const NON_EDITABLE_NATIVE_DOWNLOAD_ERROR =
   "Este certificado foi gerado como versao nao editavel. Baixe o PDF final.";
+export const BRIGADA_ORGANICA_PDF_VERSION_MARKER = "TCS Brigada Organica PDF v3";
 
 export function getTemplateNativeFileType(layout: unknown): NativeCertificateFileType {
   const parsed = templateLayoutSchema.safeParse(layout);
@@ -43,7 +44,11 @@ export async function shouldRegenerateCertificateFile(
 
   const expectedPageCount = getExpectedPdfPageCount(parsed.data);
   if (pdfInfo.pageCount !== expectedPageCount) return true;
+  if (isPdfLibGeneratedPdf(pdfInfo)) return true;
   if (!await hasExtractablePdfText(content)) return true;
+  if (isBrigadaOrganicaLayout(parsed.data) && !pdfHasCreatorMarker(pdfInfo, BRIGADA_ORGANICA_PDF_VERSION_MARKER)) {
+    return true;
+  }
 
   return !pdfFirstPageMatchesLayout(pdfInfo, parsed.data);
 }
@@ -117,10 +122,20 @@ function isPptxBaseLayout(layout: TemplateLayout) {
 }
 
 function getExpectedPdfPageCount(layout: TemplateLayout) {
+  if (isBrigadaOrganicaLayout(layout)) return 2;
+
   const basePageCount = layout.basePages?.length ?? 0;
   const elementPageCount = Math.max(0, ...layout.elements.map((element) => element.pageIndex ?? 0)) + 1;
 
   return Math.max(1, basePageCount, elementPageCount);
+}
+
+function isBrigadaOrganicaLayout(layout: TemplateLayout) {
+  const marker = `${layout.baseFileName ?? ""}`
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  return marker.includes("curso de formacao de brigada organica");
 }
 
 async function getPdfInfo(pdfBuffer: Buffer) {
@@ -130,10 +145,25 @@ async function getPdfInfo(pdfBuffer: Buffer) {
     return {
       pageCount: pdf.getPageCount(),
       firstPageSize: firstPage.getSize(),
+      producer: pdf.getProducer(),
+      creator: pdf.getCreator(),
     };
   } catch {
     return null;
   }
+}
+
+function isPdfLibGeneratedPdf(info: NonNullable<Awaited<ReturnType<typeof getPdfInfo>>>) {
+  const producer = (info.producer ?? "").toLowerCase();
+  const creator = (info.creator ?? "").toLowerCase();
+  return producer.includes("pdf-lib") && creator.includes("pdf-lib");
+}
+
+function pdfHasCreatorMarker(
+  info: NonNullable<Awaited<ReturnType<typeof getPdfInfo>>>,
+  marker: string,
+) {
+  return (info.creator ?? "").includes(marker);
 }
 
 async function hasExtractablePdfText(pdfBuffer: Buffer) {

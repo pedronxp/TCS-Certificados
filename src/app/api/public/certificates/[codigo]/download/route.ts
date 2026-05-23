@@ -24,6 +24,7 @@ import {
   getClientIp,
 } from "@/lib/rate-limit";
 import { downloadCertificateFile } from "@/lib/supabase";
+import { refreshDocxTemplatePreviewIfNeeded } from "@/lib/template-preview-refresh";
 import { normalizeVerificationCode } from "@/lib/verification-code";
 
 const PUBLIC_DOWNLOAD_RATE_LIMIT_ACTION = "public.validation.download";
@@ -172,9 +173,11 @@ async function findIssueForPublicDownload(code: string, type: CertificateFileTyp
       recipient: { select: { name: true, document: true } },
       template: {
         select: {
+          id: true,
           name: true,
           width: true,
           height: true,
+          orientation: true,
           background: true,
           layout: true,
         },
@@ -207,7 +210,8 @@ async function regeneratePublicFileContent(
 ): Promise<RegeneratedCertificateFile> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const values = readStringValues(issue.values);
-  const renderInput = { template: issue.template, values, verificationCode: issue.verificationCode, appUrl };
+  const template = await refreshDocxTemplatePreviewIfNeeded(issue.template);
+  const renderInput = { template, values, verificationCode: issue.verificationCode, appUrl };
   const content = type === "DOCX"
     ? await renderDocxBuffer(renderInput)
     : type === "PPTX"

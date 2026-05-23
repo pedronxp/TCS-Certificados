@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Document, Packer, Paragraph } from "docx";
+import { Document, Packer, Paragraph, Table, TableCell, TableRow, TextRun } from "docx";
 import JSZip from "jszip";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import PizZip from "pizzip";
@@ -148,13 +148,27 @@ test("fills PPTX placeholders when generating native PPTX output", async () => {
   assert.doesNotMatch(xml, /\{CPF\}/);
 });
 
-test("falls back to visual pages when DOCX to PDF conversion is unavailable", async () => {
+test("does not use static visual pages as final PDF for native DOCX when conversion is unavailable", async () => {
+  const previousEnv = snapshotConverterEnv();
   const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   const originalWarn = console.warn;
   console.warn = () => {};
+  disableOfficeConverters();
 
   try {
-    const output = await renderPdfBuffer({
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("Aluno {{nome}}"),
+            new Paragraph("Codigo {{COD}}"),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+
+    await assert.rejects(() => renderPdfBuffer({
       template: {
         name: "Modelo visual",
         width: 320,
@@ -164,7 +178,7 @@ test("falls back to visual pages when DOCX to PDF conversion is unavailable", as
           baseDocumentMode: "native",
           baseFileName: "modelo.docx",
           baseFileType: docxMimeType,
-          baseFileDataUrl: `data:${docxMimeType};base64,${Buffer.from("not-a-docx").toString("base64")}`,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
           baseImageDataUrl: pngDataUrl,
           basePages: [
             {
@@ -195,16 +209,14 @@ test("falls back to visual pages when DOCX to PDF conversion is unavailable", as
       values: { nome: "Maria Silva" },
       verificationCode: "TCS-BR-2026-0100",
       appUrl: "http://localhost:3000",
-    });
-
-    assert.equal(output.subarray(0, 4).toString("utf8"), "%PDF");
-    assert.ok(output.length > 1000);
+    }), /Conversor Office para PDF indisponivel/);
   } finally {
+    restoreConverterEnv(previousEnv);
     console.warn = originalWarn;
   }
 });
 
-test("renders filled DOCX preview before using static visual PDF fallback", async () => {
+test("does not render filled DOCX screenshot fallback as final PDF", async () => {
   const previousEnv = snapshotConverterEnv();
   const pngDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
   const originalWarn = console.warn;
@@ -223,7 +235,7 @@ test("renders filled DOCX preview before using static visual PDF fallback", asyn
       ],
     });
     const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
-    const output = await renderPdfBuffer({
+    await assert.rejects(() => renderPdfBuffer({
       template: {
         name: "Suporte Basico de Vida V2",
         width: 794,
@@ -249,14 +261,7 @@ test("renders filled DOCX preview before using static visual PDF fallback", asyn
       values: { nome: "Maria Silva" },
       verificationCode: "TCS-BR-2026-0101",
       appUrl: "http://localhost:3000",
-    });
-
-    const pdf = await PDFDocument.load(output);
-    const size = pdf.getPage(0).getSize();
-
-    assert.equal(pdf.getPageCount(), 1);
-    assert.ok(size.width > 500);
-    assert.ok(size.height > 500);
+    }), /Conversor Office para PDF indisponivel/);
   } finally {
     restoreConverterEnv(previousEnv);
     console.warn = originalWarn;
@@ -278,7 +283,7 @@ test("keeps native DOCX PDF fidelity when only validation footer overflows to an
     const overflowPage = nativePdf.addPage([595.3, 841.9]);
     overflowPage.drawText("Certificado valido apenas com a assinatura e CPF do aluno.", { x: 80, y: 740, size: 12, font });
     overflowPage.drawText("Numeracao:TCS-BR-2026-0200", { x: 180, y: 720, size: 12, font });
-    configureMockCloudConvertPdf(Buffer.from(await nativePdf.save()));
+    configureMockGotenbergPdf(Buffer.from(await nativePdf.save()));
 
     const baseDocx = new Document({
       sections: [
@@ -334,7 +339,138 @@ test("keeps native DOCX PDF fidelity when only validation footer overflows to an
   }
 });
 
-test("uses configured filled visual fallback when native DOCX converter returns incompatible size", async () => {
+test("compacts Curso de Formacao de Brigada Organica DOCX table before PDF conversion", async () => {
+  const previousEnv = snapshotConverterEnv();
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  let uploadedDocumentXml = "";
+  console.warn = () => {};
+
+  try {
+    const nativePdf = await PDFDocument.create();
+    nativePdf.addPage([841.9, 595.3]);
+    nativePdf.addPage([841.9, 595.3]);
+    const nativePdfBuffer = Buffer.from(await nativePdf.save());
+
+    process.env.NODE_ENV = "production";
+    process.env.GOTENBERG_URL = "https://gotenberg.example.test";
+    delete process.env.LIBREOFFICE_PATH;
+    delete process.env.CLOUDCONVERT_API_KEY;
+    delete process.env.CLOUDCONVERT_API_KEYS;
+    delete process.env.CLOUDCONVERT_API_KEY_1;
+    delete process.env.CLOUDCONVERT_API_KEY_2;
+    delete process.env.CLOUDCONVERT_API_KEY_3;
+    delete process.env.ILOVEAPI_PUBLIC_KEY;
+    delete process.env.ILOVEAPI_PUBLIC_KEYS;
+    delete process.env.ILOVEAPI_SECRET_KEY;
+    delete process.env.ILOVEAPI_SECRET_KEYS;
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+
+      if (url === "https://gotenberg.example.test/forms/libreoffice/convert") {
+        assert.equal(init?.method, "POST");
+        assert.ok(init?.body instanceof FormData);
+        const file = init.body.get("files");
+        assert.ok(file instanceof Blob);
+        const uploadedBuffer = Buffer.from(await file.arrayBuffer());
+        const zip = await JSZip.loadAsync(uploadedBuffer);
+        uploadedDocumentXml = await zip.file("word/document.xml")?.async("text") ?? "";
+        return new Response(nativePdfBuffer);
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("Aluno {{nome}}"),
+            new Paragraph({
+              children: [
+                new TextRun({
+                  text: "Carlos Alexandre R. Faria Reg.MTE0056818/MG Coren MG 001.312.974 Reg. CBMMG Nº F 0004348",
+                  size: 32,
+                }),
+              ],
+            }),
+            new Table({
+              rows: [
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      children: [
+                        new Paragraph({
+                          children: [new TextRun({ text: "CONTEÚDO PROGRAMÁTICO", size: 24 })],
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+                new TableRow({
+                  children: [
+                    new TableCell({
+                      children: [
+                        new Paragraph({
+                          children: [new TextRun({ text: "Linha extensa", size: 18 })],
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+
+    const output = await renderPdfBuffer({
+      template: {
+        name: "Curso de Formacao de Brigada Organica",
+        width: 1123,
+        height: 794,
+        background: null,
+        layout: {
+          baseDocumentMode: "native",
+          baseFileName: "Curso de Formacao de Brigada Organica.docx",
+          baseFileType: docxMimeType,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+          basePages: [
+            { index: 0, width: 1123, height: 794 },
+            { index: 1, width: 1123, height: 794 },
+            { index: 2, width: 1123, height: 794 },
+          ],
+          elements: [],
+        },
+      },
+      values: { nome: "Maria Silva" },
+      verificationCode: "TCS-BR-2026-0300",
+      appUrl: "http://localhost:3000",
+    });
+
+    const outputPdf = await PDFDocument.load(output);
+    const tableXml = uploadedDocumentXml.match(/<w:tbl>[\s\S]*?<\/w:tbl>/)?.[0] ?? "";
+
+    assert.equal(outputPdf.getPageCount(), 2);
+    assert.match(uploadedDocumentXml, /Maria Silva/);
+    assert.match(uploadedDocumentXml, /<w:keepLines\/>/);
+    assert.match(uploadedDocumentXml, /w:line="190"/);
+    assert.match(uploadedDocumentXml, /<w:pageBreakBefore\/>/);
+    assert.match(tableXml, /w:val="20"/);
+    assert.match(tableXml, /w:val="16"/);
+    assert.doesNotMatch(tableXml, /w:val="24"/);
+    assert.doesNotMatch(tableXml, /w:val="18"/);
+  } finally {
+    restoreConverterEnv(previousEnv);
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+test("rejects native DOCX PDF when converter returns incompatible size", async () => {
   const previousEnv = snapshotConverterEnv();
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
@@ -344,7 +480,7 @@ test("uses configured filled visual fallback when native DOCX converter returns 
   try {
     const nativePdf = await PDFDocument.create();
     nativePdf.addPage([100, 100]);
-    configureMockCloudConvertPdf(Buffer.from(await nativePdf.save()));
+    configureMockGotenbergPdf(Buffer.from(await nativePdf.save()));
 
     const baseDocx = new Document({
       sections: [
@@ -357,7 +493,7 @@ test("uses configured filled visual fallback when native DOCX converter returns 
       ],
     });
     const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
-    const output = await renderPdfBuffer({
+    await assert.rejects(() => renderPdfBuffer({
       template: {
         name: "Suporte Basico de Vida V2",
         width: 794,
@@ -383,14 +519,7 @@ test("uses configured filled visual fallback when native DOCX converter returns 
       values: { nome: "Maria Silva" },
       verificationCode: "TCS-BR-2026-0102",
       appUrl: "http://localhost:3000",
-    });
-
-    const pdf = await PDFDocument.load(output);
-    const size = pdf.getPage(0).getSize();
-
-    assert.equal(pdf.getPageCount(), 1);
-    assert.ok(size.width > 500);
-    assert.ok(size.height > 500);
+    }), /Conversor Office para PDF indisponivel/);
   } finally {
     restoreConverterEnv(previousEnv);
     globalThis.fetch = originalFetch;
@@ -418,8 +547,22 @@ function snapshotConverterEnv() {
     GOTENBERG_URL: process.env.GOTENBERG_URL,
     LIBREOFFICE_PATH: process.env.LIBREOFFICE_PATH,
     CLOUDCONVERT_API_KEY: process.env.CLOUDCONVERT_API_KEY,
+    CLOUDCONVERT_API_KEYS: process.env.CLOUDCONVERT_API_KEYS,
+    CLOUDCONVERT_API_KEY_1: process.env.CLOUDCONVERT_API_KEY_1,
+    CLOUDCONVERT_API_KEY_2: process.env.CLOUDCONVERT_API_KEY_2,
+    CLOUDCONVERT_API_KEY_3: process.env.CLOUDCONVERT_API_KEY_3,
     CLOUDCONVERT_API_BASE_URL: process.env.CLOUDCONVERT_API_BASE_URL,
     CLOUDCONVERT_SYNC_API_BASE_URL: process.env.CLOUDCONVERT_SYNC_API_BASE_URL,
+    ILOVEAPI_PUBLIC_KEY: process.env.ILOVEAPI_PUBLIC_KEY,
+    ILOVEAPI_PUBLIC_KEYS: process.env.ILOVEAPI_PUBLIC_KEYS,
+    ILOVEAPI_PUBLIC_KEY_1: process.env.ILOVEAPI_PUBLIC_KEY_1,
+    ILOVEAPI_PUBLIC_KEY_2: process.env.ILOVEAPI_PUBLIC_KEY_2,
+    ILOVEAPI_PUBLIC_KEY_3: process.env.ILOVEAPI_PUBLIC_KEY_3,
+    ILOVEAPI_SECRET_KEY: process.env.ILOVEAPI_SECRET_KEY,
+    ILOVEAPI_SECRET_KEYS: process.env.ILOVEAPI_SECRET_KEYS,
+    ILOVEAPI_SECRET_KEY_1: process.env.ILOVEAPI_SECRET_KEY_1,
+    ILOVEAPI_SECRET_KEY_2: process.env.ILOVEAPI_SECRET_KEY_2,
+    ILOVEAPI_SECRET_KEY_3: process.env.ILOVEAPI_SECRET_KEY_3,
     MICROSOFT_GRAPH_TENANT_ID: process.env.MICROSOFT_GRAPH_TENANT_ID,
     MICROSOFT_GRAPH_CLIENT_ID: process.env.MICROSOFT_GRAPH_CLIENT_ID,
     MICROSOFT_GRAPH_CLIENT_SECRET: process.env.MICROSOFT_GRAPH_CLIENT_SECRET,
@@ -433,8 +576,22 @@ function disableOfficeConverters() {
   delete process.env.GOTENBERG_URL;
   delete process.env.LIBREOFFICE_PATH;
   delete process.env.CLOUDCONVERT_API_KEY;
+  delete process.env.CLOUDCONVERT_API_KEYS;
+  delete process.env.CLOUDCONVERT_API_KEY_1;
+  delete process.env.CLOUDCONVERT_API_KEY_2;
+  delete process.env.CLOUDCONVERT_API_KEY_3;
   delete process.env.CLOUDCONVERT_API_BASE_URL;
   delete process.env.CLOUDCONVERT_SYNC_API_BASE_URL;
+  delete process.env.ILOVEAPI_PUBLIC_KEY;
+  delete process.env.ILOVEAPI_PUBLIC_KEYS;
+  delete process.env.ILOVEAPI_PUBLIC_KEY_1;
+  delete process.env.ILOVEAPI_PUBLIC_KEY_2;
+  delete process.env.ILOVEAPI_PUBLIC_KEY_3;
+  delete process.env.ILOVEAPI_SECRET_KEY;
+  delete process.env.ILOVEAPI_SECRET_KEYS;
+  delete process.env.ILOVEAPI_SECRET_KEY_1;
+  delete process.env.ILOVEAPI_SECRET_KEY_2;
+  delete process.env.ILOVEAPI_SECRET_KEY_3;
   delete process.env.MICROSOFT_GRAPH_TENANT_ID;
   delete process.env.MICROSOFT_GRAPH_CLIENT_ID;
   delete process.env.MICROSOFT_GRAPH_CLIENT_SECRET;
@@ -452,13 +609,27 @@ function restoreConverterEnv(env: ReturnType<typeof snapshotConverterEnv>) {
   }
 }
 
-function configureMockCloudConvertPdf(pdfBuffer: Buffer) {
+function configureMockGotenbergPdf(pdfBuffer: Buffer) {
   process.env.NODE_ENV = "production";
-  delete process.env.GOTENBERG_URL;
+  process.env.GOTENBERG_URL = "https://gotenberg.example.test";
   delete process.env.LIBREOFFICE_PATH;
-  process.env.CLOUDCONVERT_API_KEY = "test-key";
-  process.env.CLOUDCONVERT_API_BASE_URL = "https://api.example.test/v2";
-  process.env.CLOUDCONVERT_SYNC_API_BASE_URL = "https://sync.example.test/v2";
+  delete process.env.CLOUDCONVERT_API_KEY;
+  delete process.env.CLOUDCONVERT_API_KEYS;
+  delete process.env.CLOUDCONVERT_API_KEY_1;
+  delete process.env.CLOUDCONVERT_API_KEY_2;
+  delete process.env.CLOUDCONVERT_API_KEY_3;
+  delete process.env.CLOUDCONVERT_API_BASE_URL;
+  delete process.env.CLOUDCONVERT_SYNC_API_BASE_URL;
+  delete process.env.ILOVEAPI_PUBLIC_KEY;
+  delete process.env.ILOVEAPI_PUBLIC_KEYS;
+  delete process.env.ILOVEAPI_PUBLIC_KEY_1;
+  delete process.env.ILOVEAPI_PUBLIC_KEY_2;
+  delete process.env.ILOVEAPI_PUBLIC_KEY_3;
+  delete process.env.ILOVEAPI_SECRET_KEY;
+  delete process.env.ILOVEAPI_SECRET_KEYS;
+  delete process.env.ILOVEAPI_SECRET_KEY_1;
+  delete process.env.ILOVEAPI_SECRET_KEY_2;
+  delete process.env.ILOVEAPI_SECRET_KEY_3;
   delete process.env.MICROSOFT_GRAPH_TENANT_ID;
   delete process.env.MICROSOFT_GRAPH_CLIENT_ID;
   delete process.env.MICROSOFT_GRAPH_CLIENT_SECRET;
@@ -468,66 +639,12 @@ function configureMockCloudConvertPdf(pdfBuffer: Buffer) {
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
 
-    if (url === "https://api.example.test/v2/jobs") {
-      assert.equal(init?.method, "POST");
-      return jsonResponse({
-        data: {
-          id: "job-docx",
-          status: "waiting",
-          tasks: [
-            {
-              id: "task-upload",
-              name: "import-docx",
-              operation: "import/upload",
-              status: "waiting",
-              result: {
-                form: {
-                  url: "https://upload.example.test",
-                  parameters: {},
-                },
-              },
-            },
-          ],
-        },
-      });
-    }
-
-    if (url === "https://upload.example.test") {
+    if (url === "https://gotenberg.example.test/forms/libreoffice/convert") {
       assert.equal(init?.method, "POST");
       assert.ok(init?.body instanceof FormData);
-      return new Response(null, { status: 201 });
-    }
-
-    if (url === "https://sync.example.test/v2/jobs/job-docx") {
-      return jsonResponse({
-        data: {
-          id: "job-docx",
-          status: "finished",
-          tasks: [
-            {
-              id: "task-export",
-              name: "export-pdf",
-              operation: "export/url",
-              status: "finished",
-              result: {
-                files: [{ filename: "certificate.pdf", url: "https://download.example.test/docx.pdf" }],
-              },
-            },
-          ],
-        },
-      });
-    }
-
-    if (url === "https://download.example.test/docx.pdf") {
       return new Response(pdfBuffer);
     }
 
     throw new Error(`Unexpected fetch: ${url}`);
   }) as typeof fetch;
-}
-
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), {
-    headers: { "Content-Type": "application/json" },
-  });
 }

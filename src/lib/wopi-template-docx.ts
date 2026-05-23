@@ -52,7 +52,7 @@ export async function saveTemplateDocx(templateId: string, buffer: Buffer) {
   if (!template) return null;
 
   const currentLayout = templateLayoutSchema.parse(template.layout);
-  const preview = await buildDocxPreview(buffer);
+  const preview = await buildDocxPreview(buffer, { allowExternalConversion: true });
   const dataUrl = `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${buffer.toString("base64")}`;
   const nextLayout: TemplateLayout = {
     ...currentLayout,

@@ -44,6 +44,14 @@ type NormalizedCloudConvertOfficeInput = Required<Omit<CloudConvertOfficeInput, 
   engine?: string;
 };
 
+type CloudConvertConfig = {
+  apiKey: string;
+  apiUrl: string;
+  syncApiUrl: string;
+  engine: string;
+  timeoutMs: number;
+};
+
 export async function convertDocxToPdfWithCloudConvert(docxBuffer: Buffer): Promise<Buffer | null> {
   return convertOfficeToPdfWithCloudConvert({
     buffer: docxBuffer,
@@ -54,66 +62,96 @@ export async function convertDocxToPdfWithCloudConvert(docxBuffer: Buffer): Prom
 }
 
 export async function convertOfficeToPdfWithCloudConvert(input: CloudConvertOfficeInput): Promise<Buffer | null> {
-  const config = getCloudConvertConfig();
-  if (!config) return null;
+  const configs = getCloudConvertConfigs();
+  if (!configs.length) return null;
 
   const normalizedInput = normalizeOfficeInput(input);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  const failures: string[] = [];
 
-  try {
-    const job = await createCloudConvertJob(
-      config,
-      normalizedInput.inputFormat,
-      normalizedInput.engine || config.engine,
-      controller.signal,
-    );
-    const uploadTask = findTask(job, importTaskName(normalizedInput.inputFormat));
-    await uploadOfficeFileToCloudConvert(uploadTask, normalizedInput, controller.signal);
+  for (const config of configs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 
-    const finishedJob = await waitForCloudConvertJob(config, job.id, controller.signal);
-    if (finishedJob.status !== "finished") {
-      console.warn("[CloudConvert] job nao finalizado:", describeCloudConvertFailure(finishedJob));
-      return null;
+    try {
+      const job = await createCloudConvertJob(
+        config,
+        normalizedInput.inputFormat,
+        normalizedInput.engine || config.engine,
+        controller.signal,
+      );
+      const uploadTask = findTask(job, importTaskName(normalizedInput.inputFormat));
+      await uploadOfficeFileToCloudConvert(uploadTask, normalizedInput, controller.signal);
+
+      const finishedJob = await waitForCloudConvertJob(config, job.id, controller.signal);
+      if (finishedJob.status !== "finished") {
+        failures.push(describeCloudConvertFailure(finishedJob));
+        continue;
+      }
+
+      const exportTask = findTask(finishedJob, "export-pdf");
+      const fileUrl = exportTask.result?.files?.[0]?.url;
+      if (!fileUrl) {
+        failures.push("URL de exportacao ausente");
+        continue;
+      }
+
+      const response = await fetch(fileUrl, { signal: controller.signal });
+      if (!response.ok) {
+        failures.push(`falha ao baixar PDF: HTTP ${response.status} ${await response.text()}`);
+        continue;
+      }
+
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      failures.push(describeError(error));
+    } finally {
+      clearTimeout(timeout);
     }
-
-    const exportTask = findTask(finishedJob, "export-pdf");
-    const fileUrl = exportTask.result?.files?.[0]?.url;
-    if (!fileUrl) {
-      console.warn("[CloudConvert] URL de exportacao ausente.");
-      return null;
-    }
-
-    const response = await fetch(fileUrl, { signal: controller.signal });
-    if (!response.ok) {
-      console.warn("[CloudConvert] falha ao baixar PDF:", response.status, await response.text());
-      return null;
-    }
-
-    return Buffer.from(await response.arrayBuffer());
-  } catch (error) {
-    console.warn("[CloudConvert] conversor indisponivel:", error);
-    return null;
-  } finally {
-    clearTimeout(timeout);
   }
+
+  if (failures.length) {
+    console.warn("[CloudConvert] conversor indisponivel:", failures.join(" | "));
+  }
+
+  return null;
 }
 
-function getCloudConvertConfig() {
-  const apiKey = process.env.CLOUDCONVERT_API_KEY?.trim();
-  if (!apiKey) return null;
+export function hasCloudConvertApiKey() {
+  return getCloudConvertApiKeys().length > 0;
+}
 
-  return {
+function getCloudConvertConfigs(): CloudConvertConfig[] {
+  const apiKeys = getCloudConvertApiKeys();
+  if (!apiKeys.length) return [];
+
+  return apiKeys.map((apiKey) => ({
     apiKey,
     apiUrl: normalizeBaseUrl(process.env.CLOUDCONVERT_API_BASE_URL || DEFAULT_CLOUDCONVERT_API_URL),
     syncApiUrl: normalizeBaseUrl(process.env.CLOUDCONVERT_SYNC_API_BASE_URL || DEFAULT_CLOUDCONVERT_SYNC_API_URL),
     engine: process.env.CLOUDCONVERT_ENGINE?.trim() || DEFAULT_CLOUDCONVERT_ENGINE,
     timeoutMs: parsePositiveInteger(process.env.CLOUDCONVERT_TIMEOUT_MS, DEFAULT_CLOUDCONVERT_TIMEOUT_MS),
-  };
+  }));
+}
+
+function getCloudConvertApiKeys() {
+  const candidates = [
+    process.env.CLOUDCONVERT_API_KEY,
+    process.env.CLOUDCONVERT_API_KEYS,
+    process.env.CLOUDCONVERT_API_KEY_1,
+    process.env.CLOUDCONVERT_API_KEY_2,
+    process.env.CLOUDCONVERT_API_KEY_3,
+  ];
+
+  return [...new Set(
+    candidates
+      .flatMap((value) => String(value ?? "").split(/[,\n]/g))
+      .map((value) => value.trim())
+      .filter(Boolean),
+  )];
 }
 
 async function createCloudConvertJob(
-  config: NonNullable<ReturnType<typeof getCloudConvertConfig>>,
+  config: CloudConvertConfig,
   inputFormat: string,
   engine: string,
   signal: AbortSignal,
@@ -211,7 +249,7 @@ function convertTaskName(inputFormat: string) {
 }
 
 async function waitForCloudConvertJob(
-  config: NonNullable<ReturnType<typeof getCloudConvertConfig>>,
+  config: CloudConvertConfig,
   jobId: string,
   signal: AbortSignal,
 ) {
@@ -224,7 +262,7 @@ async function waitForCloudConvertJob(
 }
 
 async function cloudConvertFetch<T>(
-  config: NonNullable<ReturnType<typeof getCloudConvertConfig>>,
+  config: CloudConvertConfig,
   url: string,
   init: RequestInit,
 ) {
@@ -273,4 +311,9 @@ function normalizeBaseUrl(value: string) {
 function parsePositiveInteger(value: string | undefined, fallback: number) {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function describeError(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }

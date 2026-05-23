@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { PDFDocument, StandardFonts } from "pdf-lib";
 import {
+  BRIGADA_ORGANICA_PDF_VERSION_MARKER,
   canDownloadCertificateFile,
   certificateOutputModeLabel,
   normalizeCertificateOutputMode,
@@ -54,6 +55,8 @@ test("regenerates stored Office PDFs when page count no longer matches the templ
 
 test("keeps stored Office PDFs when native point size matches the template", async () => {
   const pdf = await PDFDocument.create();
+  pdf.setProducer("CloudConvert");
+  pdf.setCreator("CloudConvert");
   const page = pdf.addPage([595.3, 841.9]);
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   page.drawText("CERTIFICADO", { x: 72, y: 720, font, size: 24 });
@@ -64,13 +67,57 @@ test("keeps stored Office PDFs when native point size matches the template", asy
   );
 });
 
+test("regenerates legacy pdf-lib Office PDFs", async () => {
+  const pdf = await PDFDocument.create();
+  const page = pdf.addPage([595.3, 841.9]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText("CERTIFICADO", { x: 72, y: 720, font, size: 24 });
+
+  assert.equal(
+    await shouldRegenerateCertificateFile("PDF", nativeDocxLayout(), Buffer.from(await pdf.save())),
+    true,
+  );
+});
+
 test("regenerates stored Office PDFs without extractable text", async () => {
   const pdf = await PDFDocument.create();
+  pdf.setProducer("CloudConvert");
+  pdf.setCreator("CloudConvert");
   pdf.addPage([595.3, 841.9]);
 
   assert.equal(
     await shouldRegenerateCertificateFile("PDF", nativeDocxLayout(), Buffer.from(await pdf.save())),
     true,
+  );
+});
+
+test("regenerates Brigada Organica PDFs without the current header marker", async () => {
+  const pdf = await PDFDocument.create();
+  pdf.setProducer("CloudConvert");
+  pdf.setCreator("Writer");
+  const page = pdf.addPage([841.9, 595.3]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText("CERTIFICADO", { x: 72, y: 500, font, size: 24 });
+  pdf.addPage([841.9, 595.3]).drawText("CONTEUDO PROGRAMATICO", { x: 72, y: 500, font, size: 24 });
+
+  assert.equal(
+    await shouldRegenerateCertificateFile("PDF", brigadaOrganicaLayout(), Buffer.from(await pdf.save())),
+    true,
+  );
+});
+
+test("keeps Brigada Organica PDFs with the current header marker", async () => {
+  const pdf = await PDFDocument.create();
+  pdf.setProducer("pdf-lib");
+  pdf.setCreator(`Writer; ${BRIGADA_ORGANICA_PDF_VERSION_MARKER}`);
+  const page = pdf.addPage([841.9, 595.3]);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  page.drawText("CERTIFICADO", { x: 72, y: 500, font, size: 24 });
+  pdf.addPage([841.9, 595.3]).drawText("CONTEUDO PROGRAMATICO", { x: 72, y: 500, font, size: 24 });
+
+  assert.equal(
+    await shouldRegenerateCertificateFile("PDF", brigadaOrganicaLayout(), Buffer.from(await pdf.save())),
+    false,
   );
 });
 
@@ -89,5 +136,32 @@ function nativeDocxLayout() {
       },
     ],
     elements: [],
+  };
+}
+
+function brigadaOrganicaLayout() {
+  return {
+    ...nativeDocxLayout(),
+    baseFileName: "Curso de Formação de Brigada Orgânica.docx",
+    basePages: [
+      {
+        index: 0,
+        width: 1123,
+        height: 794,
+        orientation: "landscape",
+      },
+      {
+        index: 1,
+        width: 1123,
+        height: 794,
+        orientation: "landscape",
+      },
+      {
+        index: 2,
+        width: 1123,
+        height: 794,
+        orientation: "landscape",
+      },
+    ],
   };
 }
