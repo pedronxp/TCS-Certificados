@@ -6,9 +6,9 @@ import {
   canDownloadCertificateFile,
   certificateFileExtension,
   certificateFileMimeType,
-  isOfficeBaseLayout,
   NON_EDITABLE_NATIVE_DOWNLOAD_ERROR,
   normalizeCertificateFileType,
+  shouldRegenerateCertificateFile,
   type CertificateFileType,
 } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
@@ -19,8 +19,8 @@ import {
   renderPptxBuffer,
 } from "@/lib/render-certificate";
 import { downloadCertificateFile } from "@/lib/supabase";
+import { refreshDocxTemplatePreviewIfNeeded } from "@/lib/template-preview-refresh";
 
-const STALE_OFFICE_PDF_MAX_BYTES = 12_000;
 const PDF_CONVERTER_UNAVAILABLE_USER_MESSAGE =
   "Nao foi possivel gerar o PDF deste certificado agora. Baixe o arquivo nativo do modelo enquanto a conversao para PDF e configurada no servidor.";
 
@@ -78,7 +78,7 @@ export async function handleAuthenticatedCertificateDownload(
   const mustRegenerate =
     forceRegenerate ||
     !storedContent ||
-    shouldRegenerateStoredContent(fileType, issue.template.layout, storedContent);
+    await shouldRegenerateCertificateFile(fileType, issue.template.layout, storedContent);
   let regeneratedFile: RegeneratedCertificateFile | null = null;
   let regenerationError: Error | null = null;
 
@@ -139,9 +139,11 @@ async function findIssueForDownload(issueId: string, type: CertificateFileType) 
       recipient: { select: { name: true } },
       template: {
         select: {
+          id: true,
           name: true,
           width: true,
           height: true,
+          orientation: true,
           background: true,
           layout: true,
         },
@@ -168,17 +170,11 @@ type RegeneratedCertificateFile = {
   mimeType: string;
 };
 
-function shouldRegenerateStoredContent(type: CertificateFileType, layout: unknown, content: Buffer) {
-  if (type !== "PDF") return false;
-  if (!content.subarray(0, 4).equals(Buffer.from("%PDF"))) return true;
-
-  return content.length > 0 && content.length < STALE_OFFICE_PDF_MAX_BYTES && isOfficeBaseLayout(layout);
-}
-
 async function regenerateFileContent(issue: DownloadIssue, type: CertificateFileType): Promise<RegeneratedCertificateFile> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const values = readStringValues(issue.values);
-  const renderInput = { template: issue.template, values, verificationCode: issue.verificationCode, appUrl };
+  const template = await refreshDocxTemplatePreviewIfNeeded(issue.template);
+  const renderInput = { template, values, verificationCode: issue.verificationCode, appUrl };
   const content = type === "DOCX"
     ? await renderDocxBuffer(renderInput)
     : type === "PPTX"

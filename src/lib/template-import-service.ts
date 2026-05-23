@@ -124,7 +124,7 @@ async function buildImportedTemplateDraft(input: ImportTemplateInput): Promise<I
   const description = cleanText(input.description) || `Modelo enviado a partir de ${input.fileName}`;
 
   if (isDocx(input.fileName, fileType)) {
-    const preview = await buildDocxPreview(input.buffer);
+    const preview = await buildDocxPreview(input.buffer, { allowExternalConversion: true });
     const orientation = input.orientation ?? preview.page.orientation;
     const layout = uploadedBaseLayout({
       fileName: input.fileName,
