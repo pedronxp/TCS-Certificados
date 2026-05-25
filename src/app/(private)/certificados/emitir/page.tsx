@@ -2,6 +2,7 @@ import Link from "next/link";
 import { History } from "lucide-react";
 import { IssueForm } from "@/components/certificates/issue-form";
 import { requireUser } from "@/lib/auth";
+import { isTemplateLayoutDisabled } from "@/lib/certificate-layout";
 import { prisma } from "@/lib/prisma";
 import type { Metadata } from "next";
 
@@ -15,10 +16,10 @@ export default async function IssueCertificatePage({
 }) {
   const user = await requireUser();
   const selectedTemplateId = (await searchParams).template;
-  const templates = await prisma.certificateTemplate.findMany({
+  const templates = (await prisma.certificateTemplate.findMany({
     include: { variables: { orderBy: { key: "asc" } } },
     orderBy: { name: "asc" },
-  });
+  })).filter((template) => !isTemplateLayoutDisabled(template.layout));
 
   return (
     <div className="page-shell issue-page-shell" style={{ maxWidth: "68rem", margin: "0 auto" }}>

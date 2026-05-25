@@ -127,10 +127,12 @@ function createILoveApiToken(config: ILoveApiConfig) {
   const now = Math.floor(Date.now() / 1000);
   const header = base64UrlEncode(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const payload = base64UrlEncode(JSON.stringify({
-    iss: config.publicKey,
+    iss: "api.ilovepdf.com",
+    aud: "",
     iat: now,
-    nbf: now - 5,
+    nbf: now,
     exp: now + 3600,
+    jti: config.publicKey,
   }));
   const signature = createHmac("sha256", config.secretKey)
     .update(`${header}.${payload}`)

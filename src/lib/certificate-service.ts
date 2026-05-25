@@ -1,4 +1,8 @@
 import { buildDefaultCertificateDeleteAt } from "@/lib/certificate-validity";
+import {
+  getTemplateLayoutDisabledReason,
+  isTemplateLayoutDisabled,
+} from "@/lib/certificate-layout";
 import { formatDateLongPtBr, isDateField } from "@/lib/date-fields";
 import { prisma } from "@/lib/prisma";
 import {
@@ -49,6 +53,7 @@ export async function issueCertificate({
     include: { variables: true },
   });
   if (!template) throw new Error("Modelo não encontrado.");
+  assertTemplateIsEnabled(template.layout);
 
   const issuedBy = await prisma.user.findUnique({
     where: { id: issuedById },
@@ -161,6 +166,7 @@ export async function renderCertificatePreviewPdf({
     include: { variables: true },
   });
   if (!template) throw new Error("Modelo não encontrado.");
+  assertTemplateIsEnabled(template.layout);
 
   const issuedBy = await prisma.user.findUnique({
     where: { id: issuedById },
@@ -400,6 +406,13 @@ type NormalizedIssueValues = {
   original: Record<string, string>;
   normalized: Record<string, string>;
 };
+
+function assertTemplateIsEnabled(layout: unknown) {
+  if (!isTemplateLayoutDisabled(layout)) return;
+
+  const reason = getTemplateLayoutDisabledReason(layout);
+  throw new Error(reason || "Modelo desativado. Escolha outro modelo para emitir.");
+}
 
 function normalizeIssueValues(values: Record<string, string>): NormalizedIssueValues {
   const original: Record<string, string> = {};

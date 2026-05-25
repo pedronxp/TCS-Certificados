@@ -104,6 +104,24 @@ test("issueCertificate persists editable by default and selected non-editable ou
   assert.equal(readIssueCreateData(createCalls[1]).outputMode, "NON_EDITABLE");
 });
 
+test("issueCertificate blocks disabled templates", async () => {
+  mockIssueCertificateDependencies({
+    disabled: true,
+    disabledReason: "Modelo desativado para ajuste.",
+    elements: [],
+  });
+
+  await assert.rejects(
+    () => issueCertificate({
+      templateId: "template-1",
+      values: { nome: "Maria Silva" },
+      issuedById: "admin-1",
+      isTest: true,
+    }),
+    /Modelo desativado para ajuste/,
+  );
+});
+
 test("startBatchJob persists selected output mode", async () => {
   let createInput: Record<string, unknown> | null = null;
   stubPrisma(prisma.certificateBatch, "create", async (input: unknown) => {
@@ -255,14 +273,14 @@ function mockSuccessfulRateLimit() {
   }));
 }
 
-function mockIssueCertificateDependencies() {
+function mockIssueCertificateDependencies(layout: Record<string, unknown> = { elements: [] }) {
   stubPrisma(prisma.certificateTemplate, "findUnique", async () => ({
     id: "template-1",
     name: "Modelo",
     width: 1123,
     height: 794,
     background: null,
-    layout: { elements: [] },
+    layout,
     variables: [{ key: "nome", label: "Nome", required: true }],
   }));
   stubPrisma(prisma.user, "findUnique", async () => ({

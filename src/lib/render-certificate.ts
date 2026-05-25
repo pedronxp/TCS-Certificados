@@ -1,4 +1,4 @@
-import { Document, Packer, Paragraph, TextRun } from "docx";
+﻿import { Document, Packer, Paragraph, TextRun } from "docx";
 import Docxtemplater from "docxtemplater";
 import JSZip from "jszip";
 import { readFile } from "node:fs/promises";
@@ -125,7 +125,7 @@ export async function renderPdfBuffer(input: RenderInput) {
       await browser.close();
     }
   } catch (error) {
-    console.warn("Playwright indisponível; usando fallback pdf-lib.", error);
+    console.warn("Playwright indisponÃ­vel; usando fallback pdf-lib.", error);
     return renderPdfFallback(input, layout);
   }
 }
@@ -173,7 +173,7 @@ export async function renderDocxBuffer(input: RenderInput) {
           new Paragraph({
             children: [
               new TextRun({
-                text: `Código de validação: ${input.verificationCode}`,
+                text: `CÃ³digo de validaÃ§Ã£o: ${input.verificationCode}`,
                 size: 20,
               }),
             ],
@@ -269,6 +269,15 @@ async function renderPdfFromNativeDocxBaseTemplate(input: RenderInput, layout: T
       const trimmedPdf = await trimNativePdfValidationOverflow(nativePdf, expectedPageCount, input.verificationCode);
       return markBrigadaOrganicaPdfIfNeeded(input, layout, trimmedPdf);
     }
+
+    if (
+      isNr35Layout(input, layout) &&
+      nativeInfo.pageCount > expectedPageCount &&
+      pdfFirstPageMatchesTemplateSize(nativeInfo, input.template.width, input.template.height, layout)
+    ) {
+      const trimmedPdf = await trimNativePdfToPageCount(nativePdf, expectedPageCount);
+      return markBrigadaOrganicaPdfIfNeeded(input, layout, trimmedPdf);
+    }
   }
 
   return null;
@@ -299,12 +308,129 @@ function postprocessNativeDocxForPdf(input: RenderInput, layout: TemplateLayout,
     return compactBrigadaOrganicaContentTable(docxBuffer);
   }
 
+  if (isAtendimentoPreHospitalarLayout(input, layout)) {
+    return compactAtendimentoPreHospitalarContent(docxBuffer);
+  }
+
+  if (isInstrutorPrimeirosSocorrosLayout(input, layout)) {
+    return compactInstrutorPrimeirosSocorrosContent(docxBuffer);
+  }
+
+  if (isNr12MotosserraRocadeiraLayout(input, layout)) {
+    return compactNr12MotosserraRocadeiraContent(docxBuffer);
+  }
+
+  if (isGuindautoLayout(input, layout)) {
+    return compactGuindautoContent(docxBuffer);
+  }
+
+  if (isNr06Layout(input, layout)) {
+    return compactNr06Content(docxBuffer);
+  }
+
+  if (isNr31Layout(input, layout)) {
+    return compactNr31Content(docxBuffer);
+  }
+
+  if (isNr18Layout(input, layout)) {
+    return normalizeNr18Content(docxBuffer);
+  }
+
+  if (isNr20Layout(input, layout)) {
+    return normalizeNr20Content(docxBuffer);
+  }
+
+  if (isRetroescavadeiraLayout(input, layout)) {
+    return normalizeRetroescavadeiraContent(docxBuffer);
+  }
+
+  if (isNr35Layout(input, layout)) {
+    return normalizeNr35Content(docxBuffer);
+  }
+
+  if (isCombateIncendiosFlorestaisLayout(input, layout)) {
+    return normalizeCombateIncendiosFlorestaisContent(docxBuffer);
+  }
+
+  if (isCursoSbvLayout(input, layout)) {
+    return normalizeCursoSbvContent(docxBuffer);
+  }
+
+  if (isCursoInjetavelLayout(input, layout)) {
+    return normalizeCursoInjetavelContent(docxBuffer);
+  }
+
   return docxBuffer;
 }
 
 function isBrigadaOrganicaLayout(input: RenderInput, layout: TemplateLayout) {
   const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
   return marker.includes("curso de formacao de brigada organica");
+}
+
+function isAtendimentoPreHospitalarLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("atendimento pre-hospitalar");
+}
+
+function isInstrutorPrimeirosSocorrosLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("instrutor") && marker.includes("primeiros socorros");
+}
+
+function isNr12MotosserraRocadeiraLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("nr 12") && marker.includes("motosserra");
+}
+
+function isGuindautoLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("guindauto");
+}
+
+function isNr06Layout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("nr 06") || marker.includes("certificado nr 06");
+}
+
+function isNr31Layout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("nr31") || marker.includes("nr 31");
+}
+
+function isNr18Layout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("nr18") || marker.includes("nr 18");
+}
+
+function isNr20Layout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("nr20") || marker.includes("nr 20");
+}
+
+function isRetroescavadeiraLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("retroescavadeira");
+}
+
+function isNr35Layout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("nr35") || marker.includes("nr 35");
+}
+
+function isCombateIncendiosFlorestaisLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("combate") && marker.includes("incendio") && marker.includes("florestais");
+}
+
+function isCursoSbvLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("curso de sbv");
+}
+
+function isCursoInjetavelLayout(input: RenderInput, layout: TemplateLayout) {
+  const marker = normalizeModelMarker(`${input.template.name} ${layout.baseFileName ?? ""}`);
+  return marker.includes("injetavel");
 }
 
 function normalizeModelMarker(value: string) {
@@ -340,6 +466,1097 @@ function compactBrigadaOrganicaFontSize(fontSize: number) {
   if (fontSize >= 24) return 20;
   if (fontSize >= 18) return 16;
   return fontSize;
+}
+
+function compactAtendimentoPreHospitalarContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const compactedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 54, 54, 240, { after: 240 });
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 22, 22, 240, { before: 760 });
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 30, 30, 220);
+    });
+
+    if (compactedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", compactedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function compactAtendimentoPreHospitalarParagraph(
+  paragraphXml: string,
+  maxFontSize: number,
+  maxComplexFontSize: number,
+  lineHeight: number,
+  spacing: { before?: number; after?: number } = {},
+) {
+  const compactedParagraph = paragraphXml
+    .replace(/<w:spacing\b[^>]*\/>/g, "")
+    .replace(/<w:sz(?!Cs)([^>]*)w:val="(\d+)"([^>]*)\/>/g, (_match, before, value, after) => {
+      const nextValue = Math.min(Number(value), maxFontSize);
+      return `<w:sz${before}w:val="${nextValue}"${after}/>`;
+    })
+    .replace(/<w:szCs([^>]*)w:val="(\d+)"([^>]*)\/>/g, (_match, before, value, after) => {
+      const nextValue = Math.min(Number(value), maxComplexFontSize);
+      return `<w:szCs${before}w:val="${nextValue}"${after}/>`;
+    });
+
+  return ensureDocxParagraphProperty(
+    compactedParagraph,
+    `<w:spacing w:before="${spacing.before ?? 0}" w:after="${spacing.after ?? 0}" w:line="${lineHeight}" w:lineRule="auto"/>`,
+  );
+}
+
+function centerDocxParagraph(paragraphXml: string) {
+  const withoutExistingAlignment = paragraphXml.replace(/<w:jc\b[^>]*\/>/g, "");
+  return ensureDocxParagraphProperty(withoutExistingAlignment, '<w:jc w:val="center"/>');
+}
+
+function compactInstrutorPrimeirosSocorrosContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const compactedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText === "certificado") {
+        return normalizeInstrutorCertificateHeader(paragraphXml);
+      }
+
+      if (normalizedText.includes("confere o presente certificado")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 28, 28, 205);
+      }
+
+      if (normalizedText.includes("decreto 5.154") || normalizedText.includes("cataguases,")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 28, 28, 205);
+      }
+
+      if (normalizedText.includes("carlos alexandre") && normalizedText.includes("cbmmg")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 27, 27, 175);
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 54, 54, 240, { after: 320 });
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("tico cursos")) {
+        inProgramContent = false;
+        return centerDocxParagraph(compactAtendimentoPreHospitalarParagraph(paragraphXml, 24, 24, 230, { before: 460 }));
+      }
+
+      if (normalizedText.includes("curso de instrutor") || normalizedText.includes("carga horaria")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 36, 36, 230, { after: 120 });
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 31, 31, 238);
+    });
+
+    if (compactedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", compactedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeInstrutorCertificateHeader(paragraphXml: string) {
+  return paragraphXml.replace(
+    /<w:t xml:space="preserve">\s+<\/w:t>(?=<\/w:r><w:r\b[\s\S]*?<w:t>CERTIFICADO<\/w:t>)/,
+    '<w:t xml:space="preserve">        </w:t>',
+  );
+}
+
+function compactNr12MotosserraRocadeiraContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    const cleanedDocumentXml = documentXml
+      .replace(/Maquinas/g, "Máquinas")
+      .replace(/Emprego-\s*MTE/g, "Emprego - MTE")
+      .replace(/ministério do Trabalho/g, "Ministério do Trabalho")
+      .replace(/Reg\.MTE\s*0056818\/MG/g, "Reg.MTE 0056818/MG")
+      .replace(/,\s*Numeração:/g, " Numeração: ")
+      .replace(/Numeração:\s*/g, "Numeração: ");
+
+    let inProgramContent = false;
+    const compactedXml = cleanedDocumentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("nr 12") && normalizedText.includes("seguranca no trabalho")) {
+        return replaceDocxParagraphText(paragraphXml, text.replace(/Maquinas/i, "Máquinas"));
+      }
+
+      if (normalizedText.includes("conforme determina a portaria")) {
+        return compactAtendimentoPreHospitalarParagraph(
+          replaceDocxParagraphText(paragraphXml, normalizeNr12PortariaText(text)),
+          30,
+          30,
+          300,
+          { after: 180 },
+        );
+      }
+
+      if (normalizedText.includes("carlos alexandre") && normalizedText.includes("aluno")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 30, 30, 220, { before: 980 });
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 46, 46, 230, { after: 180 }),
+          "<w:pageBreakBefore/>",
+        );
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(
+            replaceDocxParagraphText(paragraphXml, normalizeNr12FooterText(text)),
+            22,
+            22,
+            220,
+            { before: 2850 },
+          ),
+        );
+      }
+
+      if (normalizedText.includes("treinamento de seguranca")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 32, 32, 220, { after: 430 });
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 24, 24, 215);
+    });
+
+    const normalizedXml = normalizeNr12ProgramTable(compactedXml);
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeNr12PortariaText(text: string) {
+  return text
+    .replace(/\s+\/\s*/g, "/")
+    .replace(/\.(Conforme determina)/i, ". $1")
+    .replace(/ministério do Trabalho/i, "Ministério do Trabalho")
+    .replace(/Emprego-\s*MTE/i, "Emprego - MTE")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function normalizeNr12FooterText(text: string) {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/,\s*Numeração:/i, " Numeração: ")
+    .replace(/Numeração:\s*/i, "Numeração: ")
+    .trim();
+}
+
+const NR12_PROGRAM_COLUMNS = [
+  [
+    "Princípios e Objetivos;",
+    "Termos e Definições;",
+    "Requisitos da Norma;",
+    "Arranjos físicos e instalações;",
+    "Instalações e dispositivos elétricos;",
+    "Dispositivo de Partida;",
+    "acionamento e parada;",
+    "Sistema de Segurança;",
+    "Dispositivo de parada de Emergência;",
+    "Meios de acesso permanente;",
+  ],
+  [
+    "Componentes pressurizados;",
+    "transporte de materiais;",
+    "aspecto ergonômico;",
+    "Riscos adicionais;",
+    "manutenção, inspeção, preparação, ajustes e reparos;",
+    "procedimento de trabalho e segurança;",
+    "Capacitação;",
+    "Planejamento e Implementação dos Cursos,",
+    "Outros requisitos específicos de segurança;",
+    "Definições finais;",
+  ],
+] as const;
+
+function normalizeNr12ProgramTable(documentXml: string) {
+  return documentXml.replace(/<w:tbl\b[\s\S]*?<\/w:tbl>/g, (tableXml) => {
+    const normalizedTableText = normalizeModelMarker(extractDocxParagraphText(tableXml));
+    if (
+      !normalizedTableText.includes("principios e objetivos") ||
+      !normalizedTableText.includes("componentes pressurizados")
+    ) {
+      return tableXml;
+    }
+
+    let cellIndex = 0;
+    return tableXml.replace(/<w:tc\b[\s\S]*?<\/w:tc>/g, (cellXml) => {
+      const lines = NR12_PROGRAM_COLUMNS[cellIndex];
+      cellIndex += 1;
+      return lines ? buildNr12ProgramCell(cellXml, lines) : cellXml;
+    });
+  });
+}
+
+function buildNr12ProgramCell(cellXml: string, lines: readonly string[]) {
+  const cellProperties = cellXml.match(/<w:tcPr\b[\s\S]*?<\/w:tcPr>|<w:tcPr\b[^>]*\/>/)?.[0] ?? "";
+  const paragraphs = lines.map((line) => buildNr12ProgramLineParagraph(line)).join("");
+  return `<w:tc>${cellProperties}${paragraphs}</w:tc>`;
+}
+
+function buildNr12ProgramLineParagraph(text: string) {
+  return [
+    '<w:p>',
+    '<w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0" w:line="305" w:lineRule="auto"/>',
+    '<w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:noProof/><w:sz w:val="30"/><w:szCs w:val="30"/><w:lang w:eastAsia="pt-BR"/></w:rPr></w:pPr>',
+    '<w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:cs="Arial"/><w:noProof/><w:sz w:val="30"/><w:szCs w:val="30"/><w:lang w:eastAsia="pt-BR"/></w:rPr>',
+    `<w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r>`,
+    "</w:p>",
+  ].join("");
+}
+
+function compactGuindautoContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const compactedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("certifica que o sr")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 30, 30, 210);
+      }
+
+      if (normalizedText.includes("cataguases,")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 30, 30, 190);
+      }
+
+      if (normalizedText.includes("carlos alexandre") || normalizedText.includes("coren mg")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 32, 32, 170);
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 46, 46, 220, { before: 650, after: 1200 }),
+          "<w:pageBreakBefore/>",
+        );
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        return centerDocxParagraph(compactAtendimentoPreHospitalarParagraph(paragraphXml, 22, 22, 220, { before: 1500 }));
+      }
+
+      if (
+        normalizedText.includes("instrutor:") ||
+        normalizedText.includes("frequencia") ||
+        normalizedText.includes("media aprovacao")
+      ) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 27, 27, 190);
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 27, 27, 190);
+    });
+
+    if (compactedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", compactedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function compactNr06Content(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const compactedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("curso de formacao de brigada organica")) {
+        return buildSimpleCenteredDocxParagraph("CURSO DE EQUIPAMENTOS DE PROTE\u00c7\u00c3O INDIVIDUAL (EPI)", 42, 220);
+      }
+
+      if (normalizedText.includes("confere que")) {
+        return compactAtendimentoPreHospitalarParagraph(normalizeNr06BodyParagraph(paragraphXml), 30, 30, 215);
+      }
+
+      if (normalizedText.includes("cataguases,")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 30, 30, 185);
+      }
+
+      if (normalizedText.includes("carlos alexandre") && normalizedText.includes("coren mg")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 28, 28, 185);
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 44, 44, 230, { after: 160 }),
+          "<w:pageBreakBefore/>",
+        );
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        return centerDocxParagraph(compactAtendimentoPreHospitalarParagraph(paragraphXml, 22, 22, 220, { before: 2200 }));
+      }
+
+      if (normalizedText.includes("curso de equipamentos") || normalizedText.includes("carga horaria")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 32, 32, 260);
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 30, 30, 310);
+    });
+
+    if (compactedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", compactedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeNr06BodyParagraph(paragraphXml: string) {
+  return paragraphXml
+    .replace(/(<w:t(?: [^>]*)?>Sr\(a\))(?!\s)(<\/w:t>)/g, "$1 $2")
+    .replace(/realizadono/g, "realizado no")
+    .replace(
+      /(<w:t(?: [^>]*)?>\s*realizado)\s*(<\/w:t><\/w:r><w:r\b[\s\S]*?<w:t(?: [^>]*)?>)no dia/g,
+      "$1 $2no dia",
+    );
+}
+
+function compactNr31Content(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    let leadingProgramDuplicateCount = 0;
+    const compactedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 44, 44, 220, { after: 260 });
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        const footerText = text.replace(/\s+/g, " ").trim();
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(replaceDocxParagraphText(paragraphXml, footerText), 18, 18, 190, { before: 420 }),
+        );
+      }
+
+      if (normalizedText.includes("curso de formacao de brigada") || normalizedText.includes("carga horaria")) {
+        return compactAtendimentoPreHospitalarParagraph(
+          replaceDocxParagraphText(paragraphXml, "Curso de NR31 Carga horária 8hrs"),
+          32,
+          32,
+          220,
+          { after: 180 },
+        );
+      }
+
+      if (
+        normalizedText === "riscos fisicos, quimicos e biologicos" ||
+        normalizedText === "ergonomia" ||
+        normalizedText.includes("equipamentos de protecao individual (epi)riscos fisicos")
+      ) {
+        leadingProgramDuplicateCount += 1;
+        if (leadingProgramDuplicateCount <= 2) return "";
+        return compactAtendimentoPreHospitalarParagraph(
+          replaceDocxParagraphText(paragraphXml, "Riscos físicos, químicos e biológicos"),
+          24,
+          24,
+          185,
+        );
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 24, 24, 185);
+    });
+
+    if (compactedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", compactedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function replaceDocxParagraphText(paragraphXml: string, text: string) {
+  let replaced = false;
+  return paragraphXml.replace(/<w:t(?: [^>]*)?>[\s\S]*?<\/w:t>/g, (textXml) => {
+    if (replaced) return textXml.replace(/(<w:t(?: [^>]*)?>)[\s\S]*?(<\/w:t>)/, "$1$2");
+    replaced = true;
+    return textXml.replace(/<w:t([^>]*)>[\s\S]*?<\/w:t>/, (_match, attrs: string) => {
+      const nextAttrs = /^\s|\s$/.test(text) && !attrs.includes("xml:space=")
+        ? `${attrs} xml:space="preserve"`
+        : attrs;
+      return `<w:t${nextAttrs}>${escapeXml(text)}</w:t>`;
+    });
+  });
+}
+
+function replaceDocxParagraphTextWithLineBreaks(paragraphXml: string, lines: readonly string[]) {
+  let replaced = false;
+  return paragraphXml.replace(/<w:t(?: [^>]*)?>[\s\S]*?<\/w:t>/g, (textXml) => {
+    if (replaced) return textXml.replace(/(<w:t(?: [^>]*)?>)[\s\S]*?(<\/w:t>)/, "$1$2");
+    replaced = true;
+    return textXml.replace(/<w:t([^>]*)>[\s\S]*?<\/w:t>/, (_match, attrs: string) => {
+      return lines.map((line) => `<w:t${attrs}>${escapeXml(line)}</w:t>`).join("<w:br/>");
+    });
+  });
+}
+
+function normalizeNr18Content(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    const normalizedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("conteudo programatico")) {
+        return ensureDocxParagraphProperty(paragraphXml, "<w:pageBreakBefore/>");
+      }
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 24, 24, 220, { before: 650 }),
+        );
+      }
+
+      return paragraphXml;
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeNr20Content(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    const cleanedDocumentXml = documentXml
+      .replace(/Reg\.MTE\s*0056818\/MG/g, "Reg.MTE 0056818/MG")
+      .replace(/carga horaria/g, "carga horária")
+      .replace(/combustível\)/gi, "Combustível)");
+
+    let inProgramContent = false;
+    let insertedProgramHeader = false;
+    const normalizedXml = cleanedDocumentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("carlos alexandre") && normalizedText.includes("aluno")) {
+        return compactAtendimentoPreHospitalarParagraph(
+          removeNr20AlunoNameFromSignature(paragraphXml, text),
+          32,
+          32,
+          220,
+          { before: 260 },
+        );
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return "";
+      }
+
+      if (inProgramContent && normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 18, 18, 190, { before: 2500 }),
+        );
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("carga horaria") || normalizedText.includes("conteudo programatico teorico")) {
+        const compactParagraph = compactAtendimentoPreHospitalarParagraph(paragraphXml, 28, 28, 205, { after: 40 });
+        if (insertedProgramHeader) return compactParagraph;
+
+        insertedProgramHeader = true;
+        return `${ensureDocxParagraphProperty(
+          buildSimpleCenteredDocxParagraph("CONTEÚDO PROGRAMÁTICO", 40, 210),
+          "<w:pageBreakBefore/>",
+        )}${compactParagraph}`;
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 26, 26, 200);
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function removeNr20AlunoNameFromSignature(paragraphXml: string, text: string) {
+  const studentName = text.match(/Faria\s+(.+?)\s+Reg\.MTE/i)?.[1]?.trim();
+  if (!studentName) return paragraphXml;
+
+  return paragraphXml.replace(
+    new RegExp(`(<w:t(?: [^>]*)?>)${escapeRegExp(studentName)}(<\\/w:t>)`, "g"),
+    "$1$2",
+  ).replace(
+    new RegExp(`(<w:t(?: [^>]*)?>)(\\s*)${escapeRegExp(studentName)}(\\s*)(<\\/w:t>)`, "g"),
+    "$1$2$3$4",
+  );
+}
+
+function normalizeRetroescavadeiraContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const normalizedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(paragraphXml, "<w:pageBreakBefore/>");
+      }
+
+      if (inProgramContent && normalizedText === ".") {
+        return "";
+      }
+
+      if (inProgramContent && normalizedText.includes("seguraca e ambiente")) {
+        return replaceDocxParagraphText(paragraphXml, text.replace(/Seguraça/i, "Segurança"));
+      }
+
+      return paragraphXml;
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeCombateIncendiosFlorestaisContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const normalizedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+      const withoutLoosePunctuation = removeIsolatedDocxTextNodes(paragraphXml, [".", ";"]);
+
+      if (normalizedText.includes("curso de prevencao") && normalizedText.includes("florestais")) {
+        return compactAtendimentoPreHospitalarParagraph(
+          replaceDocxParagraphText(
+            withoutLoosePunctuation,
+            "CURSO DE PREVENÇÃO E COMBATE A INCÊNDIOS FLORESTAIS E PRIMEIROS SOCORROS",
+          ),
+          54,
+          54,
+          380,
+          { after: 240 },
+        );
+      }
+
+      if (
+        normalizedText.includes("certifica que o sr") &&
+        normalizedText.includes("preven") &&
+        normalizedText.includes("incendio florestal")
+      ) {
+        return compactAtendimentoPreHospitalarParagraph(
+          replaceDocxParagraphText(withoutLoosePunctuation, normalizeCombateIncendiosCertificateText(text)),
+          30,
+          30,
+          275,
+        );
+      }
+
+      if (normalizedText.includes("cataguases,")) {
+        return replaceDocxParagraphText(withoutLoosePunctuation, normalizeCombateIncendiosLoosePunctuation(text));
+      }
+
+      if (normalizedText === "." || normalizedText === ";") {
+        return "";
+      }
+
+      if (!inProgramContent && withoutLoosePunctuation !== paragraphXml) {
+        return withoutLoosePunctuation;
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(
+          compactAtendimentoPreHospitalarParagraph(withoutLoosePunctuation, 54, 54, 300, { after: 360 }),
+          "<w:pageBreakBefore/>",
+        );
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        const footerText = text.replace(/\s+/g, " ").trim();
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(
+            replaceDocxParagraphText(paragraphXml, footerText),
+            24,
+            24,
+            230,
+            { before: 260 },
+          ),
+        );
+      }
+
+      if (normalizedText === "primeiros socorros" || normalizedText === "incendio em mata") {
+        return compactAtendimentoPreHospitalarParagraph(withoutLoosePunctuation, 36, 36, 260);
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(withoutLoosePunctuation, 30, 30, 260);
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeCombateIncendiosCertificateText(text: string) {
+  return normalizeCombateIncendiosLoosePunctuation(text)
+    .replace(/Sr\(a\)\.?\s*/i, "Sr(a). ")
+    .replace(/\s*,\s*portador/i, ", portador")
+    .replace(/Prevenção\s*e?/i, "Prevenção e")
+    .replace(/Prevençãoe/i, "Prevenção e")
+    .replace(/Combate\s*a\s*Incêndio/i, "Combate a Incêndio")
+    .replace(/enfase/i, "ênfase")
+    .replace(/Socorros,\s*realizado/i, "Socorros, realizado")
+    .replace(/no\s+(\d{1,2}\s+de\s+\w+\s+de\s+\d{4})/i, "no dia $1")
+    .replace(/\s+,\s*/g, ", ")
+    .replace(/\s+\./g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function removeIsolatedDocxTextNodes(paragraphXml: string, values: string[]) {
+  return paragraphXml.replace(/<w:t([^>]*)>([\s\S]*?)<\/w:t>/g, (textXml, attrs: string, value: string) => {
+    return values.includes(value.trim()) ? `<w:t${attrs}></w:t>` : textXml;
+  });
+}
+
+function normalizeCursoSbvContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    const cleanedDocumentXml = documentXml
+      .replace(/Avaliação inicial,Avaliação/g, "Avaliação inicial, Avaliação")
+      .replace(/RCP\s*,/g, "RCP,")
+      .replace(/9\.\s*PCR/g, "8. PCR")
+      .replace(/10\.\s*Oficinas/g, "9. Oficinas")
+      .replace(/(<w:t[^>]*>\s*)9(<\/w:t>\s*<\/w:r>\s*<w:r\b[\s\S]*?<w:t[^>]*>\.\s*PCR)/, "$18$2")
+      .replace(
+        /(A\.V\.E;[\s\S]*?)1(<\/w:t>\s*<\/w:r>\s*<w:r\b[\s\S]*?<w:t[^>]*>)0(<\/w:t>\s*<\/w:r>\s*<w:r\b[\s\S]*?<w:t[^>]*>\. Oficinas)/,
+        "$19$2$3",
+      )
+      .replace(/,\s*Numeração/g, " Numeração");
+
+    let inProgramContent = false;
+    const normalizedXml = cleanedDocumentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("confere o presente certificado")) {
+        return compactAtendimentoPreHospitalarParagraph(
+          replaceDocxParagraphText(paragraphXml, normalizeCursoSbvBodyText(text)),
+          32,
+          32,
+          240,
+        );
+      }
+
+      if (
+        normalizedText.includes("cataguases") &&
+        normalizedText.includes("2026") &&
+        !normalizedText.includes("t.c.s") &&
+        !normalizedText.includes("cursos e servicos")
+      ) {
+        return replaceDocxParagraphText(paragraphXml, normalizeCursoSbvDateText(text));
+      }
+
+      if (normalizedText.includes("conteudo programatico")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 50, 50, 260, { after: 240 }),
+          "<w:pageBreakBefore/>",
+        );
+      }
+
+      if (inProgramContent && normalizedText === ".") {
+        return "";
+      }
+
+      if (inProgramContent && normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        const footerParagraph = centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(
+            replaceDocxParagraphText(paragraphXml, normalizeCursoSbvFooterText(text)),
+            24,
+            24,
+            230,
+            { before: 0 },
+          ),
+        );
+        return `${buildDocxSpacerParagraph(1120)}${footerParagraph}`;
+      }
+
+      if (!inProgramContent) return paragraphXml;
+
+      if (normalizedText.includes("curso de bls") || normalizedText.includes("carga horaria")) {
+        return compactAtendimentoPreHospitalarParagraph(paragraphXml, 36, 36, 240, { after: 80 });
+      }
+
+      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 32, 32, 240);
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function normalizeCursoSbvBodyText(text: string) {
+  return text
+    .replace(/\s+,\s*/g, ", ")
+    .replace(/Sr\(a\)\.\s*/i, "Sr(a). ")
+    .replace(/Lei\s*9\.394\/96/i, "Lei 9.394/96")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function normalizeCursoSbvDateText(text: string) {
+  return text
+    .replace(/\s+,\s*/g, ", ")
+    .replace(/\s+\./g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function normalizeCursoSbvFooterText(text: string) {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/\s*,\s*Numeração/i, " Numeração")
+    .trim();
+}
+
+function normalizeCursoInjetavelContent(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(normalizeCursoSbvContent(docxBuffer));
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    const normalizedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (normalizedText.includes("carlos alexandre") && normalizedText.includes("aluno")) {
+        return compactAtendimentoPreHospitalarParagraph(
+          removeCursoInjetavelAlunoNameFromSignature(paragraphXml, text),
+          32,
+          32,
+          220,
+          { before: 480 },
+        );
+      }
+
+      if (normalizedText.includes("certificado valido apenas com a assinatura do aluno")) {
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(
+            replaceDocxParagraphTextWithLineBreaks(paragraphXml, [
+              "Certificado válido apenas com",
+              "a assinatura do aluno",
+            ]),
+            32,
+            32,
+            220,
+            { before: 80 },
+          ),
+        );
+      }
+
+      if (normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        return `${buildDocxSpacerParagraph(820)}${paragraphXml}`;
+      }
+
+      return paragraphXml;
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function removeCursoInjetavelAlunoNameFromSignature(paragraphXml: string, text: string) {
+  const studentName = text.match(/Faria\s+(.+?)\s+Coren MG/i)?.[1]?.trim();
+  if (!studentName) return paragraphXml;
+
+  const escapedName = escapeRegExp(studentName);
+  return paragraphXml.replace(
+    new RegExp(`(<w:t(?: [^>]*)?>)${escapedName}(<\\/w:t>)`, "g"),
+    "$1$2",
+  );
+}
+
+function buildDocxSpacerParagraph(lineHeight: number) {
+  return `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="${lineHeight}" w:lineRule="auto"/><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:pPr><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t xml:space="preserve">&#160;</w:t></w:r></w:p>`;
+}
+
+function normalizeCombateIncendiosLoosePunctuation(text: string) {
+  return text
+    .replace(/,\s*(?=\S)/g, ", ")
+    .replace(/\s+,\s*/g, ", ")
+    .replace(/\s+\./g, ".")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function normalizeNr35Content(docxBuffer: Buffer) {
+  try {
+    const zip = new PizZip(docxBuffer);
+    const documentXmlFile = zip.file("word/document.xml");
+    const documentXml = documentXmlFile?.asText();
+    if (!documentXml) return docxBuffer;
+
+    let inProgramContent = false;
+    const normalizedXml = documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
+      const text = extractDocxParagraphText(paragraphXml);
+      const normalizedText = normalizeModelMarker(text);
+
+      if (!normalizedText && inProgramContent) {
+        return "";
+      }
+
+      if (
+        normalizedText.includes("submetido") &&
+        normalizedText.includes("aprovado") &&
+        normalizedText.includes("trabalho em altura")
+      ) {
+        return replaceDocxParagraphText(
+          paragraphXml,
+          text
+            .replace(/portador do CPF/i, "portador(a) do CPF")
+            .replace(/CPF\s+([^,]+?)\s+por ter/i, "CPF $1, por ter")
+            .replace(/por ter submetido e aprovado em treinamento,?\s+te\S*rico e pr\S*tico para Trabalho em Altura pela Empresa/i, "por ter participado e sido aprovado(a) no treinamento teórico e prático de Trabalho em Altura pela empresa")
+            .replace(/por ter submetido e aprovado em treinamento,?\s+te\S*rico e pr\S*tico para Trabalho em Altura/i, "por ter participado e sido aprovado(a) no treinamento teórico e prático de Trabalho em Altura"),
+        );
+      }
+
+      if (normalizedText.includes("emprego") && normalizedText.includes("mte")) {
+        return replaceDocxParagraphText(
+          paragraphXml,
+          text
+            .replace(/o minist\S*rio/i, "o Ministério")
+            .replace(/Emprego-\s*MTE/i, "Emprego - MTE")
+            .replace(/\s+\/\s*/g, "/"),
+        );
+      }
+
+      if (normalizedText.includes("cataguases,")) {
+        return paragraphXml;
+      }
+
+      if (normalizedText.includes("carlos alexandre") && normalizedText.includes("coren mg")) {
+        return paragraphXml;
+      }
+
+      if (normalizedText.includes("conteudo programatico") || normalizedText.includes("program")) {
+        inProgramContent = true;
+        return ensureDocxParagraphProperty(paragraphXml, "<w:pageBreakBefore/>");
+      }
+
+      if (normalizedText.includes("curso de trabalho em altura") && normalizedText.includes("nr-35")) {
+        return replaceDocxParagraphText(
+            paragraphXml,
+            text
+              .replace(/Trabalho em altura/i, "Trabalho em Altura")
+              .replace(/NR-35\s+\S*ria/i, "NR-35 Carga horária"),
+        );
+      }
+
+      if (
+        normalizedText.includes("normas e regulamentos") ||
+        normalizedText.includes("analise de risco") ||
+        normalizedText.includes("riscos potenciais") ||
+        normalizedText.includes("equipamentos de protecao individual") ||
+        normalizedText.includes("acidentes tipicos") ||
+        normalizedText.includes("acidentes") ||
+        normalizedText.includes("condutas em situacoes")
+      ) {
+        return compactAtendimentoPreHospitalarParagraph(
+          removeDocxParagraphNumbering(
+            removeDocxParagraphKeepRules(
+              replaceDocxParagraphText(paragraphXml, normalizeNr35ProgramItemText(text)),
+            ),
+          ),
+          31,
+          31,
+          340,
+          { after: 35 },
+        );
+      }
+
+      if (inProgramContent && normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
+        inProgramContent = false;
+        const footerText = text.replace(/\s+/g, " ").trim();
+        return centerDocxParagraph(
+          compactAtendimentoPreHospitalarParagraph(
+            replaceDocxParagraphText(paragraphXml, footerText),
+            21,
+            21,
+            210,
+            { before: 4850 },
+          ),
+        );
+      }
+
+      return paragraphXml;
+    });
+
+    if (normalizedXml === documentXml) return docxBuffer;
+
+    zip.file("word/document.xml", normalizedXml);
+    return Buffer.from(zip.generate({ type: "nodebuffer" }));
+  } catch {
+    return docxBuffer;
+  }
+}
+
+function removeDocxParagraphKeepRules(paragraphXml: string) {
+  return paragraphXml
+    .replace(/<w:keepNext\/>/g, "")
+    .replace(/<w:keepLines\/>/g, "");
+}
+
+function removeDocxParagraphNumbering(paragraphXml: string) {
+  return paragraphXml.replace(/<w:numPr>[\s\S]*?<\/w:numPr>/g, "");
+}
+
+function normalizeNr35ProgramItemText(text: string) {
+  const cleanText = text.replace(/\s+;/g, ";").replace(/trabalhos altura/i, "trabalhos em altura").trim();
+  const normalizedText = normalizeModelMarker(cleanText);
+
+  if (normalizedText.includes("normas e regulamentos")) return `a) ${cleanText.replace(/^a\)\s*/i, "")}`;
+  if (normalizedText.includes("analise de risco")) return `b) ${cleanText.replace(/^b\)\s*/i, "")}`;
+  if (normalizedText.includes("riscos potenciais")) return `c) ${cleanText.replace(/^c\)\s*/i, "")}`;
+  if (normalizedText.includes("equipamentos de protecao individual")) return `d) ${cleanText.replace(/^d\)\s*/i, "")}`;
+  if (normalizedText.includes("acidentes tipicos") || normalizedText.includes("acidentes")) return `e) ${cleanText.replace(/^e\)\s*/i, "")}`;
+  if (normalizedText.includes("condutas em situacoes")) return `f) ${cleanText.replace(/^f\)\s*/i, "")}`;
+
+  return cleanText;
+}
+
+function buildSimpleCenteredDocxParagraph(text: string, fontSize: number, lineHeight: number) {
+  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0" w:line="${lineHeight}" w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:b/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:b/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 async function markBrigadaOrganicaPdfIfNeeded(input: RenderInput, layout: TemplateLayout, pdfBuffer: Buffer) {
@@ -468,7 +1685,7 @@ function compactBrigadaOrganicaSignatureParagraph(documentXml: string) {
 function addBrigadaOrganicaContentPageBreak(documentXml: string) {
   return documentXml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (paragraphXml) => {
     const text = extractDocxParagraphText(paragraphXml);
-    if (!text.includes("CONTEÚDO PROGRAMÁTICO") || paragraphXml.includes("<w:pageBreakBefore")) {
+    if (!normalizeModelMarker(text).includes("conteudo programatico") || paragraphXml.includes("<w:pageBreakBefore")) {
       return paragraphXml;
     }
 
@@ -557,7 +1774,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
   }
 
   drawCenteredPdfText(page, "CERTIFICADO", 681, fonts.bold, 40);
-  drawCenteredPdfText(page, "Curso de  Suporte   Básico de Vida", 630, fonts.bold, 14);
+  drawCenteredPdfText(page, "Curso de  Suporte   BÃ¡sico de Vida", 630, fonts.bold, 14);
 
   const name = values.nome ?? values.NOME ?? "";
   const hours = values.horas ?? values.HORAS ?? "";
@@ -566,7 +1783,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
   const cpf = values.cpf ?? values.CPF ?? "";
   const verificationCode = values.COD ?? values.codigo ?? input.verificationCode;
 
-  const bodyText = `A TCS Cursos e Serviços confere que o Sr.(a) ${name} participou do Curso de Suporte Básico de Vida com ênfase em RCP( Reanimação Cardiopulmonar), PCR(parada Cardiorrespiratória), avaliação da Cena, cinemática do trauma, convulsão, ovace, desmaio de acordo com as Diretrizes e Protocolos da Sociedade Brasileira de Terapia Intensiva- SOBRATI, com carga horária de ${hours} horas, estando habilitado ao Atendimento básico na Emergência Cardiovascular, com embasamento na Lei 9.394/ 96.`;
+  const bodyText = `A TCS Cursos e ServiÃ§os confere que o Sr.(a) ${name} participou do Curso de Suporte BÃ¡sico de Vida com Ãªnfase em RCP( ReanimaÃ§Ã£o Cardiopulmonar), PCR(parada CardiorrespiratÃ³ria), avaliaÃ§Ã£o da Cena, cinemÃ¡tica do trauma, convulsÃ£o, ovace, desmaio de acordo com as Diretrizes e Protocolos da Sociedade Brasileira de Terapia Intensiva- SOBRATI, com carga horÃ¡ria de ${hours} horas, estando habilitado ao Atendimento bÃ¡sico na EmergÃªncia Cardiovascular, com embasamento na Lei 9.394/ 96.`;
 
   drawWrappedPdfText(page, bodyText, {
     x: 35,
@@ -578,7 +1795,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
     justify: true,
   });
 
-  page.drawText("Decreto 5.154/04 deliberação CEE 14/97 – Curso Livre de aperfeiçoamento Profissional.", {
+  page.drawText("Decreto 5.154/04 deliberaÃ§Ã£o CEE 14/97 â€“ Curso Livre de aperfeiÃ§oamento Profissional.", {
     x: 35,
     y: 413,
     size: 12.4,
@@ -603,7 +1820,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
     "Carlos Alexandre R. Faria",
     "Reg.MTE0056818/MG",
     "Coren MG 001.312.974",
-    "Reg. CBMMG Nº F 0004348",
+    "Reg. CBMMG NÂº F 0004348",
   ];
   instructorLines.forEach((line, index) => {
     page.drawText(line, {
@@ -621,20 +1838,20 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
 
   drawCenteredPdfText(
     page,
-    "T.C.S   CURSOS E SERVIÇOS  CNPJ 32.340.932/0001-70   RUA: ABÍLIO TAVARES PIRES Nº199",
+    "T.C.S   CURSOS E SERVIÃ‡OS  CNPJ 32.340.932/0001-70   RUA: ABÃLIO TAVARES PIRES NÂº199",
     118,
     fonts.regular,
     9.2,
   );
   drawCenteredPdfText(
     page,
-    "BAIRRO : CENTENÁRIO     CIDADE : CATAGUASES - M. G  CEL: (32) 99996-7877 –(32) 98490-5610",
+    "BAIRRO : CENTENÃRIO     CIDADE : CATAGUASES - M. G  CEL: (32) 99996-7877 â€“(32) 98490-5610",
     104,
     fonts.regular,
     9.2,
   );
   drawCenteredPdfText(page, "Certificado valido apenas com a assinatura  e CPF do aluno.", 76, fonts.regular, 9.2);
-  drawCenteredPdfText(page, `Numeração:${verificationCode}`, 64, fonts.regular, 9.2);
+  drawCenteredPdfText(page, `NumeraÃ§Ã£o:${verificationCode}`, 64, fonts.regular, 9.2);
 
   return Buffer.from(await pdfDocument.save());
 }
@@ -679,6 +1896,14 @@ function getExpectedPdfPageCount(layout: TemplateLayout) {
 function getExpectedNativeDocxPdfPageCount(input: RenderInput, layout: TemplateLayout) {
   if (isBrigadaOrganicaLayout(input, layout)) {
     return Math.max(2, getElementPageCount(layout));
+  }
+
+  if (isInstrutorPrimeirosSocorrosLayout(input, layout)) {
+    return Math.max(2, getElementPageCount(layout));
+  }
+
+  if (isNr35Layout(input, layout)) {
+    return 2;
   }
 
   return getExpectedPdfPageCount(layout);
@@ -795,11 +2020,24 @@ async function trimNativePdfValidationOverflow(
   return Buffer.from(await outputPdf.save());
 }
 
+async function trimNativePdfToPageCount(pdfBuffer: Buffer, expectedPageCount: number) {
+  const sourcePdf = await PDFDocument.load(pdfBuffer);
+  const outputPdf = await PDFDocument.create();
+  const copiedPages = await outputPdf.copyPages(
+    sourcePdf,
+    Array.from({ length: expectedPageCount }, (_, index) => index),
+  );
+
+  for (const page of copiedPages) outputPdf.addPage(page);
+
+  return Buffer.from(await outputPdf.save());
+}
+
 function drawValidationFooter(pdfDocument: PDFDocument, page: PDFPage, verificationCode: string) {
   const { width } = page.getSize();
   const fontSize = 9;
-  const firstLine = "Certificado válido apenas com a assinatura e CPF do aluno.";
-  const secondLine = `Numeração:${verificationCode}`;
+  const firstLine = "Certificado vÃ¡lido apenas com a assinatura e CPF do aluno.";
+  const secondLine = `NumeraÃ§Ã£o:${verificationCode}`;
   const font = pdfDocument.embedStandardFont(StandardFonts.Helvetica);
 
   page.drawText(firstLine, {
@@ -887,6 +2125,7 @@ async function renderPdfFallback(input: RenderInput, layout: TemplateLayout) {
 function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) {
   const zip = new PizZip(dataUrlToBuffer(layout.baseFileDataUrl ?? ""));
   applyDocxAssetReplacementsToZip(zip, layout);
+  repairDocxTemplateDelimiterTypos(zip);
   const sourceText = [
     layout.basePreviewHtml ?? "",
     zip.file("word/document.xml")?.asText() ?? "",
@@ -906,6 +2145,21 @@ function renderDocxFromBaseTemplate(input: RenderInput, layout: TemplateLayout) 
   document.render(values);
 
   return Buffer.from(document.getZip().generate({ type: "nodebuffer" }));
+}
+
+function repairDocxTemplateDelimiterTypos(zip: PizZip) {
+  for (const filePath of ["word/document.xml", "word/header1.xml", "word/header2.xml", "word/footer1.xml", "word/footer2.xml"]) {
+    const file = zip.file(filePath);
+    const xml = file?.asText();
+    if (!xml) continue;
+
+    const repairedXml = xml.replace(
+      /(?<!\{)\{([A-Za-z0-9_\u00c0-\u017f ]+)\}\}/g,
+      (_match, rawKey: string) => `{{${rawKey.trim()}}}`,
+    );
+
+    if (repairedXml !== xml) zip.file(filePath, repairedXml);
+  }
 }
 
 async function renderDocxFromNativePptxBaseTemplate(input: RenderInput, layout: TemplateLayout) {

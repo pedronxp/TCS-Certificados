@@ -2,6 +2,7 @@ import { BatchForm } from "@/components/certificates/batch-form";
 import { requireAdmin } from "@/lib/auth";
 import { failStaleBatchJobs } from "@/lib/batch-jobs";
 import { BATCH_STATUS_LABELS } from "@/lib/batch-status";
+import { isTemplateLayoutDisabled } from "@/lib/certificate-layout";
 import { certificateOutputModeLabel } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import type { CertificateBatchStatus } from "@prisma/client";
@@ -42,13 +43,14 @@ export default async function BatchCertificatePage() {
       select: {
         id: true,
         name: true,
+        layout: true,
         variables: {
           select: { id: true, key: true, label: true, required: true },
           orderBy: { createdAt: "asc" },
         },
       },
       orderBy: { name: "asc" },
-    }),
+    }).then((items) => items.filter((template) => !isTemplateLayoutDisabled(template.layout))),
     prisma.certificateBatch.findMany({
       include: {
         template: { select: { name: true } },

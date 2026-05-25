@@ -66,6 +66,7 @@ export function buildVerificationTemplateValues(verificationCode: string) {
     Cod: fullCode,
     Codigo: fullCode,
     "Codigo de Validacao": fullCode,
+    DOC: fullCode,
     cod: fullCode,
     COD: fullCode,
     codigo: fullCode,

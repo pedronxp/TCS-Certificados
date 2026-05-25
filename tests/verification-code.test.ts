@@ -79,6 +79,7 @@ test("builds system template values for validation code placeholders", () => {
     Cod: "TCS-BR-2026-0042",
     Codigo: "TCS-BR-2026-0042",
     "Codigo de Validacao": "TCS-BR-2026-0042",
+    DOC: "TCS-BR-2026-0042",
     cod: "TCS-BR-2026-0042",
     COD: "TCS-BR-2026-0042",
     codigo: "TCS-BR-2026-0042",

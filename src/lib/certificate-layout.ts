@@ -62,6 +62,10 @@ export const templateLayoutPageSchema = z.object({
 export const templateLayoutSchema = z.object({
   elements: z.array(templateElementSchema).default([]),
   variableDefinitions: z.array(templateVariableDefinitionSchema).optional(),
+  disabled: z.boolean().optional(),
+  disabledReason: z.string().optional(),
+  maintenance: z.boolean().optional(),
+  maintenanceReason: z.string().optional(),
   basePages: z.array(templateLayoutPageSchema).optional(),
   baseDocumentMode: z.enum(["native", "editable"]).optional(),
   baseFileName: z.string().optional(),
@@ -86,6 +90,34 @@ export type TemplateVariableDefinition = z.infer<typeof templateVariableDefiniti
 export type TemplatePageBorder = z.infer<typeof templatePageBorderSchema>;
 export type TemplateLayoutPage = z.infer<typeof templateLayoutPageSchema>;
 export type TemplateBaseAsset = z.infer<typeof templateBaseAssetSchema>;
+
+export function isTemplateLayoutDisabled(layout: unknown) {
+  const parsed = templateLayoutSchema.safeParse(layout);
+  if (!parsed.success) return false;
+
+  return parsed.data.disabled === true;
+}
+
+export function getTemplateLayoutDisabledReason(layout: unknown) {
+  const parsed = templateLayoutSchema.safeParse(layout);
+  if (!parsed.success) return "";
+
+  return parsed.data.disabledReason?.trim() ?? "";
+}
+
+export function isTemplateLayoutMaintenance(layout: unknown) {
+  const parsed = templateLayoutSchema.safeParse(layout);
+  if (!parsed.success) return false;
+
+  return parsed.data.maintenance === true;
+}
+
+export function getTemplateLayoutMaintenanceReason(layout: unknown) {
+  const parsed = templateLayoutSchema.safeParse(layout);
+  if (!parsed.success) return "";
+
+  return parsed.data.maintenanceReason?.trim() ?? "";
+}
 
 export function extractVariables(layout: TemplateLayout) {
   const variables = new Map<string, { label: string; required: boolean }>();

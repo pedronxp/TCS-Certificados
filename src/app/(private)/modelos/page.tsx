@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { TemplateActions } from "@/components/templates/template-actions";
 import { UploadTemplateButton } from "@/components/templates/upload-template-button";
 import { requireAdmin } from "@/lib/auth";
+import { isTemplateLayoutDisabled, isTemplateLayoutMaintenance } from "@/lib/certificate-layout";
 import { prisma } from "@/lib/prisma";
 import type { Metadata } from "next";
 
@@ -105,11 +106,13 @@ export default async function TemplatesPage({
           >
             {mostUsedTemplates.map((template) => {
               const pageCount = getTemplatePageCount(template.layout);
+              const disabled = isTemplateLayoutDisabled(template.layout);
+              const maintenance = isTemplateLayoutMaintenance(template.layout);
 
               return (
                 <Link
                   key={template.id}
-                  href={`/certificados/emitir?template=${template.id}`}
+                  href={disabled ? `/modelos/${template.id}` : `/certificados/emitir?template=${template.id}`}
                   className="dark-card"
                   style={{ display: "block", textDecoration: "none", padding: "1rem" }}
                 >
@@ -122,7 +125,11 @@ export default async function TemplatesPage({
                         {template._count.issues} emissões
                       </p>
                     </div>
-                    <span className="chip chip-brand">{formatPageCount(pageCount)}</span>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", justifyContent: "flex-end" }}>
+                      {disabled ? <span className="chip chip-danger">Desativado</span> : null}
+                      {maintenance ? <span className="chip chip-warning">Manutenção</span> : null}
+                      <span className="chip chip-brand">{formatPageCount(pageCount)}</span>
+                    </div>
                   </div>
                 </Link>
               );
@@ -145,6 +152,8 @@ export default async function TemplatesPage({
           >
             {templates.map((template) => {
             const pageCount = getTemplatePageCount(template.layout);
+            const disabled = isTemplateLayoutDisabled(template.layout);
+            const maintenance = isTemplateLayoutMaintenance(template.layout);
 
             return (
               <article key={template.id} className="dark-card" style={{ display: "grid", gap: "1rem" }}>
@@ -178,7 +187,11 @@ export default async function TemplatesPage({
                 </Link>
 
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center" }}>
-                  <span className="chip chip-brand">{formatPageCount(pageCount)}</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}>
+                    {disabled ? <span className="chip chip-danger">Desativado</span> : null}
+                    {maintenance ? <span className="chip chip-warning">Manutenção</span> : null}
+                    <span className="chip chip-brand">{formatPageCount(pageCount)}</span>
+                  </div>
                   <span style={{ color: "var(--text-muted)", fontSize: "0.8125rem" }}>
                     {template._count.issues} emissões
                   </span>
@@ -215,21 +228,42 @@ export default async function TemplatesPage({
                       Editar
                     </Link>
                   </div>
-                  <Link
-                    href={`/certificados/emitir?template=${template.id}`}
-                    className="btn btn-primary"
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "0.375rem",
-                      fontSize: "0.8125rem",
-                      flex: 1,
-                      justifyContent: "center",
-                    }}
-                  >
-                    <BadgeCheck style={{ width: 14, height: 14 }} />
-                    Emitir
-                  </Link>
+                  {disabled ? (
+                    <span
+                      className="btn btn-ghost"
+                      aria-disabled="true"
+                      title="Modelo desativado"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.375rem",
+                        fontSize: "0.8125rem",
+                        flex: 1,
+                        justifyContent: "center",
+                        opacity: 0.65,
+                        cursor: "not-allowed",
+                      }}
+                    >
+                      <BadgeCheck style={{ width: 14, height: 14 }} />
+                      Desativado
+                    </span>
+                  ) : (
+                    <Link
+                      href={`/certificados/emitir?template=${template.id}`}
+                      className="btn btn-primary"
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "0.375rem",
+                        fontSize: "0.8125rem",
+                        flex: 1,
+                        justifyContent: "center",
+                      }}
+                    >
+                      <BadgeCheck style={{ width: 14, height: 14 }} />
+                      Emitir
+                    </Link>
+                  )}
                   <div style={{ display: "flex", justifyContent: "flex-end" }}>
                     <TemplateActions id={template.id} />
                   </div>
