@@ -308,6 +308,72 @@ test("does not render filled DOCX screenshot fallback as final PDF", async () =>
   }
 });
 
+test("renders Suporte Basico de Vida V2 controlled PDF with valid Portuguese accents", async () => {
+  const previousEnv = snapshotConverterEnv();
+  const originalWarn = console.warn;
+  console.warn = () => {};
+  disableOfficeConverters();
+
+  try {
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("CERTIFICADO"),
+            new Paragraph("Curso de Suporte Básico de Vida"),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+
+    const output = await renderPdfBuffer({
+      template: {
+        name: "Suporte Basico de Vida V2",
+        width: 794,
+        height: 1123,
+        background: null,
+        layout: {
+          baseDocumentMode: "native",
+          baseFileName: "Suporte Basico de Vida V2.docx",
+          baseFileType: docxMimeType,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+          basePages: [
+            {
+              index: 0,
+              width: 794,
+              height: 1123,
+              border: { color: "#ff0000", width: 4 },
+            },
+          ],
+          elements: [],
+        },
+      },
+      values: {
+        nome: "Eliel Ribeiro Martins dos Santos",
+        horas: "4",
+        cidade: "Além Paraíba",
+        data_extenso: "23 de maio de 2026",
+      },
+      verificationCode: "TCS-BR-2026-0998",
+      appUrl: "http://localhost:3000",
+    });
+
+    const text = await extractPdfText(output);
+
+    assert.match(text, /Suporte\s+Básico de Vida/);
+    assert.match(text, /Cursos e Serviços/);
+    assert.match(text, /ênfase em RCP/);
+    assert.match(text, /Reanimação Cardiopulmonar/);
+    assert.match(text, /Certificado válido apenas com a assinatura e CPF do aluno/);
+    assert.match(text, /Numeração:TCS-BR-2026-0998/);
+    assert.doesNotMatch(text, /BÃ|ServiÃ|ReanimaÃ|NumeraÃ|deliberaÃ/);
+  } finally {
+    restoreConverterEnv(previousEnv);
+    console.warn = originalWarn;
+  }
+});
+
 test("keeps native DOCX PDF fidelity when only validation footer overflows to an extra page", async () => {
   const previousEnv = snapshotConverterEnv();
   const originalFetch = globalThis.fetch;
@@ -1761,6 +1827,126 @@ test("normalizes NR 35 Portuguese text and keeps the native PDF to two pages", a
     assert.match(uploadedDocumentXml, /Ministério do Trabalho e Emprego - MTE/);
     assert.match(uploadedDocumentXml, /NR-35 Carga horária 8 hrs/);
     assert.match(uploadedDocumentXml, /trabalhos em altura/);
+  } finally {
+    restoreConverterEnv(previousEnv);
+    globalThis.fetch = originalFetch;
+    console.warn = originalWarn;
+  }
+});
+
+test("keeps NR 20 program content legible on page two", async () => {
+  const previousEnv = snapshotConverterEnv();
+  const originalFetch = globalThis.fetch;
+  const originalWarn = console.warn;
+  let uploadedDocumentXml = "";
+  console.warn = () => {};
+
+  try {
+    const nativePdf = await PDFDocument.create();
+    nativePdf.addPage([841.9, 595.3]);
+    nativePdf.addPage([841.9, 595.3]);
+    const nativePdfBuffer = Buffer.from(await nativePdf.save());
+
+    process.env.NODE_ENV = "production";
+    process.env.GOTENBERG_URL = "https://gotenberg.example.test";
+    delete process.env.LIBREOFFICE_PATH;
+    delete process.env.CLOUDCONVERT_API_KEY;
+    delete process.env.CLOUDCONVERT_API_KEYS;
+    delete process.env.CLOUDCONVERT_API_KEY_1;
+    delete process.env.CLOUDCONVERT_API_KEY_2;
+    delete process.env.CLOUDCONVERT_API_KEY_3;
+    delete process.env.ILOVEAPI_PUBLIC_KEY;
+    delete process.env.ILOVEAPI_PUBLIC_KEYS;
+    delete process.env.ILOVEAPI_SECRET_KEY;
+    delete process.env.ILOVEAPI_SECRET_KEYS;
+    delete process.env.MICROSOFT_GRAPH_TENANT_ID;
+    delete process.env.MICROSOFT_GRAPH_CLIENT_ID;
+    delete process.env.MICROSOFT_GRAPH_CLIENT_SECRET;
+    delete process.env.MICROSOFT_GRAPH_DRIVE_ID;
+    delete process.env.MICROSOFT_GRAPH_USER_ID;
+
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+
+      if (url === "https://gotenberg.example.test/forms/libreoffice/convert") {
+        assert.equal(init?.method, "POST");
+        assert.ok(init?.body instanceof FormData);
+        const file = init.body.get("files");
+        assert.ok(file instanceof Blob);
+        const uploadedBuffer = Buffer.from(await file.arrayBuffer());
+        const zip = await JSZip.loadAsync(uploadedBuffer);
+        uploadedDocumentXml = await zip.file("word/document.xml")?.async("text") ?? "";
+        return new Response(nativePdfBuffer);
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const baseDocx = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph("CERTIFICADO"),
+            new Paragraph("Curso de NR 20 - Seguranca e Saude no Trabalho com Inflamaveis e Combustivel"),
+            new Paragraph("Confere que o Sr(a) {{NOME}}, portador do CPF {{CPF}}, concluiu o curso com carga horaria de {{HORAS}} horas."),
+            new Paragraph("Carlos Alexandre R. Faria {{NOME}} Reg.MTE0056818/MG Aluno Coren MG 001.312.974"),
+            new Paragraph("CONTEUDO PROGRAMATICO"),
+            new Paragraph("Carga horaria: {{HORA}} horas"),
+            new Paragraph("1. Inflamaveis: caracteristicas, propriedades, perigos e riscos;"),
+            new Paragraph("2. Controles coletivo e individual para trabalhos com inflamaveis;"),
+            new Paragraph("3. Fontes de ignicao e seu controle;"),
+            new Paragraph("4. Protecao contra incendio com inflamaveis;"),
+            new Paragraph("5. Procedimentos em situacoes de emergencia com inflamaveis;"),
+            new Paragraph("6. Estudo da Norma Regulamentadora n. 20;"),
+            new Paragraph("7. Analise Preliminar de Perigos/Riscos: conceitos e exercicios praticos;"),
+            new Paragraph("8. Permissao para Trabalho com Inflamaveis."),
+            new Paragraph("Conhecimentos e utilizacao dos sistemas de seguranca contra incendio com inflamaveis."),
+            new Paragraph("T.C.S CURSOS E SERVICOS CNPJ 32.340.932/0001-70 RUA: ABILIO TAVARES PIRES N 199 BAIRRO: CENTENARIO CIDADE: CATAGUASES - M. G CEL: (32) 99996-7877"),
+          ],
+        },
+      ],
+    });
+    const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+
+    const output = await renderPdfBuffer({
+      template: {
+        name: "NR 20",
+        width: 1123,
+        height: 794,
+        background: null,
+        layout: {
+          baseDocumentMode: "native",
+          baseFileName: "NR 20..docx",
+          baseFileType: docxMimeType,
+          baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+          basePages: [
+            { index: 0, width: 1123, height: 794 },
+            { index: 1, width: 1123, height: 794 },
+          ],
+          elements: [],
+        },
+      },
+      values: {
+        NOME: "Maria Silva",
+        CPF: "123.456.789-00",
+        HORAS: "16",
+        HORA: "16",
+      },
+      verificationCode: "TCS-BR-2026-0920",
+      appUrl: "http://localhost:3000",
+    });
+
+    const outputPdf = await PDFDocument.load(output);
+
+    assert.equal(outputPdf.getPageCount(), 2);
+    assert.match(uploadedDocumentXml, /w:pageBreakBefore/);
+    assert.match(uploadedDocumentXml, /w:line="310"/);
+    assert.match(uploadedDocumentXml, /w:after="100"/);
+    assert.match(uploadedDocumentXml, /w:before="2200"/);
+    assert.match(uploadedDocumentXml, /w:color w:val="000000"/);
+    assert.match(uploadedDocumentXml, /w:rFonts w:ascii="Times New Roman"/);
+    assert.match(uploadedDocumentXml, /Reg\.MTE 0056818\/MG/);
+    assert.doesNotMatch(uploadedDocumentXml, /Reg\.MTE0056818\/MG/);
   } finally {
     restoreConverterEnv(previousEnv);
     globalThis.fetch = originalFetch;
