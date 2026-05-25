@@ -5,7 +5,14 @@ import {
   CertificateTemplatePreview,
   getTemplatePreviewImage,
 } from "@/components/templates/certificate-template-preview";
-import { normalizeVisualDocxLayout, templateLayoutSchema } from "@/lib/certificate-layout";
+import {
+  getTemplateLayoutDisabledReason,
+  getTemplateLayoutMaintenanceReason,
+  isTemplateLayoutDisabled,
+  isTemplateLayoutMaintenance,
+  normalizeVisualDocxLayout,
+  templateLayoutSchema,
+} from "@/lib/certificate-layout";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { isTemplateVariableRequired } from "@/lib/template-variable-fields";
@@ -30,6 +37,10 @@ export default async function ViewTemplatePage({
   if (!template) notFound();
 
   const layout = normalizeVisualDocxLayout(templateLayoutSchema.parse(template.layout));
+  const disabled = isTemplateLayoutDisabled(template.layout);
+  const disabledReason = getTemplateLayoutDisabledReason(template.layout);
+  const maintenance = isTemplateLayoutMaintenance(template.layout);
+  const maintenanceReason = getTemplateLayoutMaintenanceReason(template.layout);
   const imageSrc = getTemplatePreviewImage({
     background: template.background,
     layout,
@@ -44,16 +55,39 @@ export default async function ViewTemplatePage({
           </Link>
           <h1 className="page-title">{template.name}</h1>
           <p className="page-subtitle">{template.description || "Modelo sem descrição."}</p>
+          {disabled ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
+              <span className="chip chip-danger">Desativado</span>
+              {disabledReason ? (
+                <span style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>{disabledReason}</span>
+              ) : null}
+            </div>
+          ) : null}
+          {maintenance ? (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.75rem", alignItems: "center" }}>
+              <span className="chip chip-warning">Manutenção</span>
+              {maintenanceReason ? (
+                <span style={{ color: "var(--text-muted)", fontSize: "0.875rem" }}>{maintenanceReason}</span>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.625rem" }}>
           <Link href={`/modelos/${template.id}/editar`} className="btn btn-ghost">
             <Pencil style={{ width: 16, height: 16 }} />
             Editar modelo
           </Link>
-          <Link href={`/certificados/emitir?template=${template.id}`} className="btn btn-primary">
-            <BadgeCheck style={{ width: 16, height: 16 }} />
-            Emitir
-          </Link>
+          {disabled ? (
+            <span className="btn btn-ghost" aria-disabled="true" style={{ opacity: 0.65, cursor: "not-allowed" }}>
+              <BadgeCheck style={{ width: 16, height: 16 }} />
+              Desativado
+            </span>
+          ) : (
+            <Link href={`/certificados/emitir?template=${template.id}`} className="btn btn-primary">
+              <BadgeCheck style={{ width: 16, height: 16 }} />
+              Emitir
+            </Link>
+          )}
         </div>
       </div>
 
@@ -78,6 +112,8 @@ export default async function ViewTemplatePage({
             <h2 className="section-title">Detalhes</h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem", marginTop: "0.75rem" }}>
               <span className="chip">{template.variables.length} variáveis</span>
+              {disabled ? <span className="chip chip-danger">Desativado</span> : null}
+              {maintenance ? <span className="chip chip-warning">Manutenção</span> : null}
               <span className="chip">{template._count.issues} emissões</span>
               <span className="chip">{template._count.batches} lotes</span>
               <span className="chip">{template.orientation}</span>

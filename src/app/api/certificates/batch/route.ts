@@ -10,6 +10,7 @@ import {
   validateSingleCompanyAndDate,
 } from "@/lib/batch-certificate-validation";
 import { failStaleBatchJobs, getBatchJob, processBatchJobChunk, startBatchJob } from "@/lib/batch-jobs";
+import { getTemplateLayoutDisabledReason, isTemplateLayoutDisabled } from "@/lib/certificate-layout";
 import { normalizeCertificateOutputMode } from "@/lib/certificate-output-format";
 import { prisma } from "@/lib/prisma";
 import { validateBatchRowCount, validateBatchSpreadsheetFile } from "@/lib/upload-limits";
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
   const template = await prisma.certificateTemplate.findUnique({
     where: { id: templateId },
     select: {
+      layout: true,
       variables: {
         select: { key: true, label: true, required: true },
         orderBy: { createdAt: "asc" },
@@ -40,6 +42,13 @@ export async function POST(request: Request) {
 
   if (!template) {
     return NextResponse.json({ error: "Modelo não encontrado." }, { status: 404 });
+  }
+
+  if (isTemplateLayoutDisabled(template.layout)) {
+    return NextResponse.json(
+      { error: getTemplateLayoutDisabledReason(template.layout) || "Modelo desativado. Escolha outro modelo para emitir." },
+      { status: 400 },
+    );
   }
 
   const supportError = validateBatchTemplateSupport(template.variables);
