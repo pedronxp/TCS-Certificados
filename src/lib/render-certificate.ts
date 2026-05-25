@@ -173,7 +173,7 @@ export async function renderDocxBuffer(input: RenderInput) {
           new Paragraph({
             children: [
               new TextRun({
-                text: `CÃ³digo de validaÃ§Ã£o: ${input.verificationCode}`,
+                text: `Código de validação: ${input.verificationCode}`,
                 size: 20,
               }),
             ],
@@ -525,6 +525,14 @@ function compactAtendimentoPreHospitalarParagraph(
     compactedParagraph,
     `<w:spacing w:before="${spacing.before ?? 0}" w:after="${spacing.after ?? 0}" w:line="${lineHeight}" w:lineRule="auto"/>`,
   );
+}
+
+function forceDocxParagraphFont(paragraphXml: string, fontName = "Arial") {
+  const fontXml = `<w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:eastAsia="${fontName}" w:cs="${fontName}"/>`;
+  return paragraphXml
+    .replace(/<w:rFonts\b[^>]*\/>/g, "")
+    .replace(/<w:color\b[^>]*\/>/g, "")
+    .replace(/<w:rPr>/g, `<w:rPr>${fontXml}<w:color w:val="000000"/>`);
 }
 
 function centerDocxParagraph(paragraphXml: string) {
@@ -1042,24 +1050,33 @@ function normalizeNr20Content(docxBuffer: Buffer) {
       if (inProgramContent && normalizedText.includes("t.c.s") && normalizedText.includes("cursos e servicos")) {
         inProgramContent = false;
         return centerDocxParagraph(
-          compactAtendimentoPreHospitalarParagraph(paragraphXml, 18, 18, 190, { before: 2500 }),
+          forceDocxParagraphFont(
+            compactAtendimentoPreHospitalarParagraph(paragraphXml, 24, 24, 240, { before: 2200 }),
+            "Times New Roman",
+          ),
         );
       }
 
       if (!inProgramContent) return paragraphXml;
 
       if (normalizedText.includes("carga horaria") || normalizedText.includes("conteudo programatico teorico")) {
-        const compactParagraph = compactAtendimentoPreHospitalarParagraph(paragraphXml, 28, 28, 205, { after: 40 });
+        const compactParagraph = forceDocxParagraphFont(
+          compactAtendimentoPreHospitalarParagraph(paragraphXml, 34, 34, 310, { after: 160 }),
+          "Times New Roman",
+        );
         if (insertedProgramHeader) return compactParagraph;
 
         insertedProgramHeader = true;
         return `${ensureDocxParagraphProperty(
-          buildSimpleCenteredDocxParagraph("CONTEÚDO PROGRAMÁTICO", 40, 210),
+          buildSimpleCenteredDocxParagraph("CONTEÚDO PROGRAMÁTICO", 46, 270, "Times New Roman", true),
           "<w:pageBreakBefore/>",
         )}${compactParagraph}`;
       }
 
-      return compactAtendimentoPreHospitalarParagraph(paragraphXml, 26, 26, 200);
+      return forceDocxParagraphFont(
+        compactAtendimentoPreHospitalarParagraph(paragraphXml, 33, 33, 310, { after: 100 }),
+        "Times New Roman",
+      );
     });
 
     if (normalizedXml === documentXml) return docxBuffer;
@@ -1555,8 +1572,15 @@ function normalizeNr35ProgramItemText(text: string) {
   return cleanText;
 }
 
-function buildSimpleCenteredDocxParagraph(text: string, fontSize: number, lineHeight: number) {
-  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0" w:line="${lineHeight}" w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:b/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial" w:eastAsia="Arial" w:cs="Arial"/><w:b/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
+function buildSimpleCenteredDocxParagraph(
+  text: string,
+  fontSize: number,
+  lineHeight: number,
+  fontName = "Arial",
+  italic = false,
+) {
+  const italicXml = italic ? "<w:i/>" : "";
+  return `<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0" w:line="${lineHeight}" w:lineRule="auto"/><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:eastAsia="${fontName}" w:cs="${fontName}"/><w:b/>${italicXml}<w:color w:val="000000"/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/></w:rPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="${fontName}" w:hAnsi="${fontName}" w:eastAsia="${fontName}" w:cs="${fontName}"/><w:b/>${italicXml}<w:color w:val="000000"/><w:sz w:val="${fontSize}"/><w:szCs w:val="${fontSize}"/></w:rPr><w:t xml:space="preserve">${escapeXml(text)}</w:t></w:r></w:p>`;
 }
 
 async function markBrigadaOrganicaPdfIfNeeded(input: RenderInput, layout: TemplateLayout, pdfBuffer: Buffer) {
@@ -1774,7 +1798,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
   }
 
   drawCenteredPdfText(page, "CERTIFICADO", 681, fonts.bold, 40);
-  drawCenteredPdfText(page, "Curso de  Suporte   BÃ¡sico de Vida", 630, fonts.bold, 14);
+  drawCenteredPdfText(page, "Curso de  Suporte   Básico de Vida", 630, fonts.bold, 14);
 
   const name = values.nome ?? values.NOME ?? "";
   const hours = values.horas ?? values.HORAS ?? "";
@@ -1783,7 +1807,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
   const cpf = values.cpf ?? values.CPF ?? "";
   const verificationCode = values.COD ?? values.codigo ?? input.verificationCode;
 
-  const bodyText = `A TCS Cursos e ServiÃ§os confere que o Sr.(a) ${name} participou do Curso de Suporte BÃ¡sico de Vida com Ãªnfase em RCP( ReanimaÃ§Ã£o Cardiopulmonar), PCR(parada CardiorrespiratÃ³ria), avaliaÃ§Ã£o da Cena, cinemÃ¡tica do trauma, convulsÃ£o, ovace, desmaio de acordo com as Diretrizes e Protocolos da Sociedade Brasileira de Terapia Intensiva- SOBRATI, com carga horÃ¡ria de ${hours} horas, estando habilitado ao Atendimento bÃ¡sico na EmergÃªncia Cardiovascular, com embasamento na Lei 9.394/ 96.`;
+  const bodyText = `A TCS Cursos e Serviços confere que o Sr.(a) ${name} participou do Curso de Suporte Básico de Vida com ênfase em RCP (Reanimação Cardiopulmonar), PCR (parada cardiorrespiratória), avaliação da cena, cinemática do trauma, convulsão, OVACE e desmaio, de acordo com as Diretrizes e Protocolos da Sociedade Brasileira de Terapia Intensiva - SOBRATI, com carga horária de ${hours} horas, estando habilitado ao atendimento básico na emergência cardiovascular, com embasamento na Lei 9.394/96.`;
 
   drawWrappedPdfText(page, bodyText, {
     x: 35,
@@ -1795,7 +1819,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
     justify: true,
   });
 
-  page.drawText("Decreto 5.154/04 deliberaÃ§Ã£o CEE 14/97 â€“ Curso Livre de aperfeiÃ§oamento Profissional.", {
+  page.drawText("Decreto 5.154/04 deliberação CEE 14/97 - Curso Livre de aperfeiçoamento Profissional.", {
     x: 35,
     y: 413,
     size: 12.4,
@@ -1820,7 +1844,7 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
     "Carlos Alexandre R. Faria",
     "Reg.MTE0056818/MG",
     "Coren MG 001.312.974",
-    "Reg. CBMMG NÂº F 0004348",
+    "Reg. CBMMG Nº F 0004348",
   ];
   instructorLines.forEach((line, index) => {
     page.drawText(line, {
@@ -1838,20 +1862,20 @@ async function renderSuporteBasicoVidaPdf(input: RenderInput, layout: TemplateLa
 
   drawCenteredPdfText(
     page,
-    "T.C.S   CURSOS E SERVIÃ‡OS  CNPJ 32.340.932/0001-70   RUA: ABÃLIO TAVARES PIRES NÂº199",
+    "T.C.S   CURSOS E SERVIÇOS  CNPJ 32.340.932/0001-70   RUA: ABÍLIO TAVARES PIRES Nº199",
     118,
     fonts.regular,
     9.2,
   );
   drawCenteredPdfText(
     page,
-    "BAIRRO : CENTENÃRIO     CIDADE : CATAGUASES - M. G  CEL: (32) 99996-7877 â€“(32) 98490-5610",
+    "BAIRRO : CENTENÁRIO     CIDADE : CATAGUASES - M. G  CEL: (32) 99996-7877 -(32) 98490-5610",
     104,
     fonts.regular,
     9.2,
   );
-  drawCenteredPdfText(page, "Certificado valido apenas com a assinatura  e CPF do aluno.", 76, fonts.regular, 9.2);
-  drawCenteredPdfText(page, `NumeraÃ§Ã£o:${verificationCode}`, 64, fonts.regular, 9.2);
+  drawCenteredPdfText(page, "Certificado válido apenas com a assinatura e CPF do aluno.", 76, fonts.regular, 9.2);
+  drawCenteredPdfText(page, `Numeração:${verificationCode}`, 64, fonts.regular, 9.2);
 
   return Buffer.from(await pdfDocument.save());
 }
@@ -2036,8 +2060,8 @@ async function trimNativePdfToPageCount(pdfBuffer: Buffer, expectedPageCount: nu
 function drawValidationFooter(pdfDocument: PDFDocument, page: PDFPage, verificationCode: string) {
   const { width } = page.getSize();
   const fontSize = 9;
-  const firstLine = "Certificado vÃ¡lido apenas com a assinatura e CPF do aluno.";
-  const secondLine = `NumeraÃ§Ã£o:${verificationCode}`;
+  const firstLine = "Certificado válido apenas com a assinatura e CPF do aluno.";
+  const secondLine = `Numeração:${verificationCode}`;
   const font = pdfDocument.embedStandardFont(StandardFonts.Helvetica);
 
   page.drawText(firstLine, {
