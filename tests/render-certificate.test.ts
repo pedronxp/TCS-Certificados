@@ -55,6 +55,49 @@ test("fills DOCX validation code placeholders with the full verification code", 
   assert.doesNotMatch(xml, /undefined/);
 });
 
+test("fills uppercase DOCX company placeholders from normalized values", async () => {
+  const baseDocx = new Document({
+    sections: [
+      {
+        children: [
+          new Paragraph("Aluno {{NOME}}"),
+          new Paragraph("Empresa {{EMPRESA}}"),
+        ],
+      },
+    ],
+  });
+  const baseBuffer = Buffer.from(await Packer.toBuffer(baseDocx));
+
+  const output = await renderDocxBuffer({
+    template: {
+      name: "NR 35",
+      width: 595,
+      height: 842,
+      background: null,
+      layout: {
+        baseDocumentMode: "native",
+        baseFileName: "NR 35.docx",
+        baseFileType: docxMimeType,
+        baseFileDataUrl: `data:${docxMimeType};base64,${baseBuffer.toString("base64")}`,
+        elements: [],
+      },
+    },
+    values: {
+      nome: "Ana Silva",
+      empresa: "ACME Treinamentos",
+    },
+    verificationCode: "TCS-BR-2026-0035",
+    appUrl: "http://localhost:3000",
+  });
+
+  const xml = new PizZip(output).file("word/document.xml")?.asText() ?? "";
+
+  assert.match(xml, /Ana Silva/);
+  assert.match(xml, /ACME Treinamentos/);
+  assert.doesNotMatch(xml, /\{\{NOME\}\}/);
+  assert.doesNotMatch(xml, /\{\{EMPRESA\}\}/);
+});
+
 test("renders multiline styled text consistently in certificate HTML", async () => {
   const html = await renderCertificateHtml({
     template: {
@@ -95,6 +138,33 @@ test("renders multiline styled text consistently in certificate HTML", async () 
   assert.match(html, /font-style:italic/);
   assert.match(html, /text-decoration:underline/);
   assert.match(html, /line-height:1.5/);
+});
+
+test("fills uppercase visual variable elements from normalized values", async () => {
+  const html = await renderCertificateHtml({
+    template: {
+      name: "Modelo",
+      width: 1123,
+      height: 794,
+      background: null,
+      layout: {
+        elements: [
+          {
+            id: "company",
+            type: "variable",
+            content: "{{EMPRESA}}",
+            variableKey: "EMPRESA",
+          },
+        ],
+      },
+    },
+    values: { empresa: "ACME Treinamentos" },
+    verificationCode: "TCS-BR-2026-0036",
+    appUrl: "http://localhost:3000",
+  });
+
+  assert.match(html, /ACME Treinamentos/);
+  assert.doesNotMatch(html, /\{\{EMPRESA\}\}/);
 });
 
 test("fills PPTX placeholders when generating native PPTX output", async () => {

@@ -144,7 +144,7 @@ export async function renderDocxBuffer(input: RenderInput) {
     .filter((element) => element.type !== "image" && element.type !== "qr")
     .map((element) =>
       element.type === "variable" && element.variableKey
-        ? values[element.variableKey] ?? ""
+        ? resolveTemplateValue(element.variableKey, values)
         : fillTemplateText(element.content, values),
     )
     .filter(Boolean);
@@ -1043,10 +1043,23 @@ function applyDocxAssetReplacementsToZip(zip: PizZip, layout: TemplateLayout) {
 }
 
 function buildRenderValues(input: RenderInput): Record<string, string> {
-  return {
+  return expandRenderValueAliases({
     ...input.values,
     ...buildVerificationTemplateValues(input.verificationCode),
-  };
+  });
+}
+
+function expandRenderValueAliases(values: Record<string, string>) {
+  const expanded = { ...values };
+
+  for (const [key, value] of Object.entries(values)) {
+    const normalizedKey = normalizeVariableKey(key);
+    if (normalizedKey && expanded[normalizedKey] === undefined) {
+      expanded[normalizedKey] = value;
+    }
+  }
+
+  return expanded;
 }
 
 function dataUrlToBuffer(dataUrl: string) {
@@ -1358,7 +1371,7 @@ function certificateHtml({
 
         const text =
           element.type === "variable" && element.variableKey
-            ? values[element.variableKey] ?? ""
+            ? resolveTemplateValue(element.variableKey, values)
             : fillTemplateText(element.content, values);
 
         return `<div style="${common}">${escapeHtml(text)}</div>`;
