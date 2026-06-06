@@ -19,6 +19,11 @@ const templates = [
     matchNames: ["NR 20", "NR 20.", "Certificado NR 20."],
   },
   {
+    pattern: /^NR 35\.docx$/i,
+    name: "NR 35",
+    matchNames: ["NR35", "NR-35", "NR 35", "Certificado NR 35", "Certificado NR 35."],
+  },
+  {
     pattern: /^Curso de injet/i,
     name: "Curso de injet\u00e1vel",
     matchNames: ["Curso de injet\u00e1vel"],
